@@ -1801,7 +1801,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		requestModel = mapped
 	}
 	if requestModel == "" {
-		requestModel = "gpt-image-2"
+		requestModel = openAIImagesDefaultModel
 	}
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
@@ -1827,13 +1827,25 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 	upstreamCtx = withOpenAIImagesSelfBuiltRequest(upstreamCtx)
+	// 图片是自建 Responses body：先落设备载体，再允许线协议收口去掉独立安装头。
+	ids := resolveCodexFingerprintIDsFromRequest(c, account, nil)
+	stageCodexFingerprintIDs(c, ids)
+	if codexDeviceWireProfileEnabled(c, account) {
+		responsesBody, _, err = applyCodexFingerprintClientMetadataRaw(responsesBody, ids)
+		if err != nil {
+			return nil, fmt.Errorf("apply image device metadata: %w", err)
+		}
+		stageCodexConvergenceBodyIdentityRaw(c, codexAccountIdentitySource(c, account), responsesBody)
+	}
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
 	if err != nil {
 		return nil, err
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "text/event-stream")
-	upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
+	if !codexDeviceWireProfileEnabled(c, account) {
+		upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
