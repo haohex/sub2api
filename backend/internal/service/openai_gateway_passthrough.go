@@ -219,6 +219,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				body = fpBody
 			}
 		}
+		// klno 请求时区替换：与非透传路径同一语义（raw 字节外科手术，热路径禁全量 Unmarshal）。
+		// compact 形态没有 environment_context，快速否定分支会直接放行。
+		if tzBody, tzChanged, tzErr := applyCodexRequestTimezoneRaw(account, body); tzErr != nil {
+			return nil, tzErr
+		} else if tzChanged {
+			body = tzBody
+		}
 		// 无条件覆写（含 nil）：failover 从收敛账号切到 off 账号时，上一账号的 IDs 不得残留。
 		stageCodexFingerprintIDs(c, fpIDs)
 		// klno 指纹收敛：暂存体内已派生的会话身份，供出站头在入站没有连字符会话头时重建。

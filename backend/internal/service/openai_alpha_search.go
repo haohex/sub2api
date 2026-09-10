@@ -50,6 +50,14 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 	body = sanitizedBody
 
+	// klno 请求时区替换：standalone alpha/search 的 settings.user_location.timezone 同步成
+	// 账号出口时区（PAT 走下面的 web_search 桥接，在构造桥接请求时改写）。
+	if rewritten, changed, rewriteErr := applyCodexRequestTimezoneToAlphaSearchBody(account, body); rewriteErr != nil {
+		return nil, rewriteErr
+	} else if changed {
+		body = rewritten
+	}
+
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -151,7 +159,13 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if upstreamModel == "" {
 		upstreamModel = requestedModel
 	}
-	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel)
+	// klno 请求时区替换：只有该请求真的带 user_location 时才解析目标时区，避免无谓的
+	// 代理探测（与环境块改写同一取舍；开关未开或无代理时代理解析返回空串）。
+	timezone := ""
+	if gjson.GetBytes(alphaBody, "settings.user_location").IsObject() {
+		timezone = resolveCodexRequestTimezone(account)
+	}
+	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel, timezone)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +302,10 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	return req, nil
 }
 
-func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string) ([]byte, error) {
+// buildOpenAIAlphaSearchResponsesWebSearchBody 组装桥接请求。
+// timezone 非空时（klno 请求时区替换）：把 web_search 的 user_location.timezone 与
+// prompt 里那份 settings JSON 的同一字段一起改写成目标时区，两处必须同值。
+func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string, timezone string) ([]byte, error) {
 	if strings.TrimSpace(model) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -299,6 +316,7 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 	if userLocation := gjson.GetBytes(alphaBody, "settings.user_location"); userLocation.IsObject() {
 		var loc map[string]any
 		if err := json.Unmarshal([]byte(userLocation.Raw), &loc); err == nil && len(loc) > 0 {
+			applyCodexSearchLocationTimezone(loc, timezone)
 			tool["user_location"] = loc
 		}
 	}
@@ -312,7 +330,7 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 				"content": []any{
 					map[string]any{
 						"type": "input_text",
-						"text": openAIAlphaSearchResponsesWebSearchPrompt(alphaBody),
+						"text": openAIAlphaSearchResponsesWebSearchPrompt(alphaBody, timezone),
 					},
 				},
 			},
@@ -322,7 +340,7 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 	return json.Marshal(payload)
 }
 
-func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte) string {
+func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte, timezone string) string {
 	var b strings.Builder
 	_, _ = b.WriteString("Execute this Codex standalone web.run request for another model.\n")
 	_, _ = b.WriteString("Use the hosted web_search tool when web/current information is needed.\n")
@@ -332,6 +350,13 @@ func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte) string {
 		_, _ = b.WriteString(truncateOpenAIAlphaSearchPromptJSON(commands, 12000))
 	}
 	if settings := strings.TrimSpace(gjson.GetBytes(alphaBody, "settings").Raw); settings != "" {
+		// klno 请求时区替换：prompt 里嵌的这份 settings 与 tools[].user_location 是同一份
+		// 客户端声明的两个副本，必须一起改写，否则模型看到的位置与搜索工具用的位置对不上。
+		if timezone != "" && gjson.Get(settings, "user_location.timezone").Exists() {
+			if patched, err := sjson.SetBytes([]byte(settings), "user_location.timezone", timezone); err == nil {
+				settings = string(patched)
+			}
+		}
 		_, _ = b.WriteString("\n\nSearch settings JSON:\n")
 		_, _ = b.WriteString(truncateOpenAIAlphaSearchPromptJSON(settings, 4000))
 	}

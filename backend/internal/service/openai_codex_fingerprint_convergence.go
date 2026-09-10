@@ -452,6 +452,13 @@ func applyCodexIdentityToWSPayload(c *gin.Context, account *Account, payload []b
 			next = rewritten
 		}
 	}
+	// klno 请求时区替换：WS 帧与 HTTP /responses 同语义（握手帧与后续 response.create
+	// 帧都可能带 environment_context，逐帧改写保持两者一致）。
+	if rewritten, changed, err := applyCodexRequestTimezoneRaw(account, next); err != nil {
+		return payload, err
+	} else if changed {
+		next = rewritten
+	}
 	stageCodexFingerprintIDs(c, ids)
 	stageCodexConvergenceBodyIdentityRaw(c, source, next)
 	return next, nil

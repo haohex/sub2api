@@ -2233,6 +2233,28 @@
         </div>
       </div>
 
+      <!-- klno 请求时区替换：按账号开关，跟随代理出口 IP 反查时区，
+           见 backend/internal/service/openai_codex_request_timezone.go -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexRequestTimezone') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexRequestTimezoneDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="codexRequestTimezone"
+            data-testid="edit-codex-request-timezone"
+            type="checkbox"
+            class="h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+      </div>
+
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
@@ -3454,6 +3476,12 @@ const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 const codexFingerprintConvergence = ref(false)
+// klno 请求时区替换：勾选=跟随代理出口 IP（写 'auto'）；codexRequestTimezoneFixed 非空时
+// 表示账号上原本就是显式 IANA 名，编辑时原样保留。
+const codexRequestTimezone = ref(false)
+const codexRequestTimezoneFixed = ref('')
+const CODEX_REQUEST_TIMEZONE_OFF_VALUES = new Set(['', 'off', 'false', '0', 'none'])
+const CODEX_REQUEST_TIMEZONE_AUTO_VALUES = new Set(['auto', 'proxy', 'follow', 'follow-proxy', 'true', '1'])
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -3936,6 +3964,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'off'
   codexFingerprintConvergence.value = false
+  codexRequestTimezone.value = false
+  codexRequestTimezoneFixed.value = ''
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -3994,6 +4024,18 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? fpMode as CodexFingerprintMode
         : 'off')
       codexFingerprintConvergence.value = extra?.codex_experimental_fingerprint_convergence === true
+      // 请求时区替换：'auto'/'proxy' 等按勾选呈现；显式的 IANA 名（走 API 写入的高级用法）
+      // 也呈现为勾选，并原样保留，避免普通的编辑动作把固定时区降级成 auto。
+      const tzRaw = extra?.codex_request_timezone
+      if (typeof tzRaw === 'string' && tzRaw.includes('/') && !CODEX_REQUEST_TIMEZONE_AUTO_VALUES.has(tzRaw.trim().toLowerCase())) {
+        codexRequestTimezoneFixed.value = tzRaw.trim()
+        codexRequestTimezone.value = true
+      } else {
+        codexRequestTimezoneFixed.value = ''
+        codexRequestTimezone.value = typeof tzRaw === 'string'
+          ? !CODEX_REQUEST_TIMEZONE_OFF_VALUES.has(tzRaw.trim().toLowerCase())
+          : tzRaw === true
+      }
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -5521,6 +5563,13 @@ const handleSubmit = async () => {
           newExtra.codex_experimental_fingerprint_convergence = true
         } else {
           delete newExtra.codex_experimental_fingerprint_convergence
+        }
+        // klno 请求时区替换：勾选落 'auto'（跟随代理出口 IP），账号上原本是显式 IANA 时
+        // 原样保留；不勾删键（对应后端 codexRequestTimezoneFromAccount）。
+        if (codexRequestTimezone.value) {
+          newExtra.codex_request_timezone = codexRequestTimezoneFixed.value || 'auto'
+        } else {
+          delete newExtra.codex_request_timezone
         }
       }
 

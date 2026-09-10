@@ -547,6 +547,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				markDecodedModified()
 			}
 		}
+		// klno 请求时区替换：把 <environment_context> 的时区/日期改写成账号出口地区，
+		// 避免"美区账号 + 亚洲时区客户端"两套地理信号同时出站。
+		if !isCompactRequest && applyCodexRequestTimezoneMap(account, decoded) {
+			markDecodedModified()
+		}
 		// 将 fpIDs 存入 gin context，供 buildUpstreamRequest 中头改写使用。
 		// 无条件覆写（含 nil）：failover 从收敛账号切到 off 账号时，上一
 		// 账号的 IDs 不得残留（stageCodexFingerprintIDs 注释）。

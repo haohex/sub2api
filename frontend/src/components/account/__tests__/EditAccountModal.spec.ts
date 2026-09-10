@@ -747,6 +747,57 @@ describe('EditAccountModal', () => {
     )
   })
 
+  it('loads and clears the Codex request timezone switch', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.extra = {
+      codex_request_timezone: 'auto'
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="edit-codex-request-timezone"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+
+    // 关闭后应删除该键，而不是写入 false/off
+    await toggle.setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('codex_request_timezone')
+  })
+
+  it('writes auto for the Codex request timezone switch and preserves a fixed IANA value', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-codex-request-timezone"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_request_timezone).toBe('auto')
+
+    // 账号上原本是显式 IANA 名时，普通编辑动作不得把它降级成 auto
+    const fixed = buildAccount()
+    fixed.type = 'oauth'
+    fixed.extra = { codex_request_timezone: 'America/Los_Angeles' }
+    updateAccountMock.mockClear()
+    updateAccountMock.mockResolvedValue(fixed)
+
+    const fixedWrapper = mountModal(fixed)
+    expect((fixedWrapper.get('[data-testid="edit-codex-request-timezone"]').element as HTMLInputElement).checked).toBe(true)
+    await fixedWrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_request_timezone).toBe('America/Los_Angeles')
+  })
+
   it('submits the Codex namespace flatten toggle when switched on', async () => {
     const account = buildAccount()
     account.type = 'oauth'

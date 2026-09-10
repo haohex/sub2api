@@ -244,6 +244,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			applyCodexFingerprintClientMetadata(reqBody, fpIDs)
 		}
 		stageCodexFingerprintIDs(c, fpIDs)
+		// klno 请求时区替换：Messages 桥的 input 同样可能带 <environment_context>，
+		// 与非透传 /responses 用同一套改写（下面统一次序列化，无需额外收口）。
+		applyCodexRequestTimezoneMap(account, reqBody)
 		delete(reqBody, "prompt_cache_key")
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)

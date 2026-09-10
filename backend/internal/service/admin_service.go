@@ -616,6 +616,9 @@ type ProxyExitInfo struct {
 	Region      string
 	Country     string
 	CountryCode string
+	// Timezone 是出口 IP 的 IANA 时区（ip-api 的 timezone 字段），
+	// 供 Codex 请求时区替换使用；其他探测源（ipify 等）不提供，为空。
+	Timezone string
 }
 
 // ProxyExitInfoProber tests proxy connectivity and retrieves exit information

@@ -7,6 +7,19 @@
 前提：预演库的目标账号必须是 device + 实验收敛【双开】——线协议投影
 (applyCodexDeviceWireProfile) 只在双开时生效，单开跑出来的结果不代表 pro1。
 
+时区断言（可选）：目标账号开了账号级「请求时区替换」(extra.codex_request_timezone) 后，
+用 SUB2API_REHEARSAL_TIMEZONE 声明该账号代理出口时区（如 America/Los_Angeles）。
+探针会故意发一个错的时区（SENTINEL_TZ），断言出站被改写成期望值、且日期与目标时区当天相符；
+不设这个环境变量时，时区断言整体跳过（发送侧照常带探针时区，不做判定）。
+
+跑法：
+  python3 fp_probe.py --selftest      # 离线自检检查器与反例，不发任何请求
+  SUB2API_REHEARSAL_API_KEY=... SUB2API_REHEARSAL_TIMEZONE=America/Los_Angeles python3 fp_probe.py
+
+正式跑之前会先发一条"热身"请求：代理出口时区是按需异步探测的（结果缓存 6 小时，
+请求路径上不等探测），不热身的话第一个用例必然落在冷缓存上、拿到未改写的时区。
+热身只在正式计数之前发生，不参与捕获比对。
+
 设计约束（上一版踩过的坑，逐条钉死）：
   1. 每个用例必须有对应捕获，数量和路径都要对上；没发出去 = 失败，不是跳过。
   2. curl 的退出码要检查，非 0 直接失败。
@@ -22,6 +35,7 @@
 import base64
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -30,6 +44,10 @@ import time
 
 GW = "http://127.0.0.1:18080"
 KEY = os.environ.get("SUB2API_REHEARSAL_API_KEY", "")
+# klno 请求时区替换的期望值：账号代理出口 IP 所在时区。留空 = 跳过时区断言。
+EXPECTED_TZ = os.environ.get("SUB2API_REHEARSAL_TIMEZONE", "").strip()
+# 探针故意发的"错误"时区（UTC+14，任何美区/欧区账号都不可能匹配）。被改写的实现必然让它消失。
+SENTINEL_TZ = "Pacific/Kiritimati"
 CAP = "/opt/s2a-rehearsal/echo/capture.jsonl"
 UA = "codex-tui/0.153.4 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; 0.153.4)"
 INSTALL = "7f582abd-05d2-4a59-b4e5-ec1b733b4edc"
@@ -159,23 +177,35 @@ def meta(s, window_number=WINDOW_NUMBER):
             "x-codex-turn-metadata": turn_meta(s, window_number)}
 
 
+def env_context(timezone=SENTINEL_TZ, date="2026-06-20"):
+    """真实客户端在会话开始（以及时区/日期变化）时插入的环境块：
+    codex-rs core/src/session/world_state.rs + core/src/context/world_state/environment.rs。"""
+    return ("<environment_context>\n  <current_date>%s</current_date>\n"
+            "  <timezone>%s</timezone>\n  <network enabled=\"true\" />\n</environment_context>"
+            % (date, timezone))
+
+
 def resp_body(s, stream=True):
     return {"model": "gpt-5.4", "stream": stream, "prompt_cache_key": s,
             "client_metadata": meta(s),
-            "input": [{"type": "message", "role": "user", "content": "hi"}]}
+            "input": [
+                {"type": "message", "role": "user",
+                 "content": [{"type": "input_text", "text": env_context()}]},
+                {"type": "message", "role": "user", "content": "hi"},
+            ]}
 
 
 def build_cases():
     s1, s2, s3, s4, s5, s6 = (sid(i) for i in range(1, 7))
     return [
         {"label": "A 直连 SSE", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses",
+         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
          "body": resp_body(s1), "headers": codex_headers(s1)},
         {"label": "B 中继剥头 SSE", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses",
+         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
          "body": resp_body(s2), "headers": codex_headers(s2, relayed=True)},
         {"label": "C 非流式", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses",
+         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
          "body": resp_body(s3, stream=False), "headers": codex_headers(s3)},
         {"label": "D compact", "path": "/v1/responses/compact", "contract": "compact",
          "upstream": "/backend-api/codex/responses/compact",
@@ -186,9 +216,16 @@ def build_cases():
          "upstream": "/backend-api/codex/responses",
          "body": {"model": "gpt-image-2", "prompt": "a cat", "n": 1, "size": "1024x1024"},
          "headers": codex_headers(s5)},
+        # 客户端声明的搜索位置：时区替换开启时，出站两份副本（standalone 的
+        # settings.user_location、PAT 桥接的 tools[].user_location 与 prompt 里的 settings）
+        # 都必须变成账号出口时区，而 city/country 保持客户端原值。
         {"label": "F alpha/search", "path": "/v1/alpha/search", "contract": "search",
-         "upstream": "/backend-api/codex/alpha/search",
-         "body": {"id": s6, "model": "gpt-5.4", "query": "x"}, "headers": codex_headers(s6)},
+         "upstream": "/backend-api/codex/alpha/search", "expect_search_timezone": True,
+         "body": {"id": s6, "model": "gpt-5.4", "query": "x",
+                  "settings": {"search_context_size": "medium",
+                               "user_location": {"type": "approximate", "city": "Shanghai",
+                                                 "country": "CN", "timezone": SENTINEL_TZ}}},
+         "headers": codex_headers(s6)},
     ]
 
 
@@ -250,6 +287,110 @@ def resolve(token, ctx):
         t = hdr(ctx["row"], "thread-id")
         return ("%s:%d" % (t, ctx.get("window_number", WINDOW_NUMBER))) if t else None
     raise AssertionError("unknown token " + token)
+
+
+# ── 时区替换检查（klno codex_request_timezone / codexRequestTimezone）─────────
+
+ENV_CONTEXT_TZ_RE = re.compile(r"<timezone>([^<]*)</timezone>")
+ENV_CONTEXT_DATE_RE = re.compile(r"<current_date>([^<]*)</current_date>")
+
+
+def input_texts(body):
+    """按 Responses 的两种文本载体取出 input 里的文本：input 字符串、message 的文本项。"""
+    out = []
+    if not isinstance(body, dict):
+        return out
+    raw_input = body.get("input")
+    if isinstance(raw_input, str):
+        out.append(raw_input)
+        return out
+    if not isinstance(raw_input, list):
+        return out
+    for item in raw_input:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            out.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    out.append(part["text"])
+    return out
+
+
+def env_context_values(body):
+    """取出出站环境块里的 (timezone, current_date)；没有环境块返回 (None, None)。"""
+    for text in input_texts(body):
+        if "<environment_context>" not in text:
+            continue
+        tz = ENV_CONTEXT_TZ_RE.search(text)
+        date = ENV_CONTEXT_DATE_RE.search(text)
+        return (tz.group(1) if tz else None, date.group(1) if date else None)
+    return (None, None)
+
+
+def expected_dates(timezone):
+    """目标时区"今天"的 ISO 日期集合（含前后一天，容忍跨零点与安装时差）。
+    tz 数据不可用时返回空集合 → 跳过日期断言。"""
+    try:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo(timezone)).date()
+        return {(today + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
+    except Exception:
+        return set()
+
+
+def timezone_env_problems(body, sentinel, expected, label):
+    """环境块时区断言。expected 为空 = 未声明期望值，整体跳过（不判改写与否）。"""
+    if not expected:
+        return []
+    out_tz, out_date = env_context_values(body)
+    if out_tz is None:
+        return ["%s 出站环境块里没有 <timezone>（应改写为 %s）" % (label, expected)]
+    if out_tz == sentinel:
+        return ["%s 环境块时区未被改写，仍是探针发的 %s" % (label, sentinel)]
+    if out_tz != expected:
+        return ["%s 环境块时区 %r != 期望 %r" % (label, out_tz, expected)]
+    dates = expected_dates(expected)
+    if dates and out_date not in dates:
+        return ["%s 环境块日期 %r 与目标时区 %s 的当天不符（只改时区没改日期？）"
+                % (label, out_date, expected)]
+    return []
+
+
+def search_location_problems(body, sentinel, expected, label):
+    """alpha/search 出站 user_location.timezone 断言：只看存在的那一种形态——
+    standalone 是 settings.user_location，PAT 桥接是 tools[].user_location 加 prompt 里的
+    settings 副本。expected 为空 = 跳过。"""
+    if not expected or not isinstance(body, dict):
+        return []
+    problems = []
+    found = []
+    standalone = jget(body, "settings.user_location.timezone")
+    if isinstance(standalone, str):
+        found.append(("settings.user_location.timezone", standalone))
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for idx, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                continue
+            location = tool.get("user_location")
+            if isinstance(location, dict) and isinstance(location.get("timezone"), str):
+                found.append(("tools[%d].user_location.timezone" % idx, location["timezone"]))
+    if not found:
+        problems.append("%s 出站请求里找不到 user_location.timezone（探针发过，不该消失）" % label)
+    for name, value in found:
+        if value == sentinel:
+            problems.append("%s %s 未被改写，仍是探针发的 %s" % (label, name, sentinel))
+        elif value != expected:
+            problems.append("%s %s 为 %r != 期望 %r" % (label, name, value, expected))
+    # prompt 里那份 settings 副本（仅 PAT 桥接路径有），必须与工具侧同值。
+    for text in input_texts(body):
+        if '"user_location"' in text and sentinel in text:
+            problems.append("%s prompt 里的 settings 副本仍带探针时区 %s" % (label, sentinel))
+    return problems
 
 
 def check_rows(rows, cases, cross_check=True):
@@ -347,6 +488,12 @@ def check_rows(rows, cases, cross_check=True):
         ua = hdr(row, "user-agent") or ""
         if not ua.rstrip().endswith(")"):
             problems.append("%s UA 缺尾部客户端标识组" % label)
+
+        # 时区替换（可选断言）：只有声明了期望时区才判定，否则整体跳过。
+        if case.get("expect_env_timezone"):
+            problems += timezone_env_problems(body, SENTINEL_TZ, EXPECTED_TZ, label)
+        if case.get("expect_search_timezone"):
+            problems += search_location_problems(body, SENTINEL_TZ, EXPECTED_TZ, label)
 
     if cross_check:
         problems += cross_device_problems(devices)
@@ -489,8 +636,73 @@ def selftest():
         print("  [ok] 反例被拦下：跨路径设备不一致")
 
     failures += selftest_ws()
+    failures += selftest_timezone()
     print("\n自检结果：%s" % ("全部反例均被拦下" if failures == 0 else "%d 条未被拦下" % failures))
     return 1 if failures else 0
+
+
+def selftest_timezone():
+    """时区检查器的反例自检：这些样本不联网，纯构造。"""
+    failures = 0
+    expected = "America/Los_Angeles"
+    dates = expected_dates(expected)
+    today = sorted(dates)[1] if dates else "2026-06-20"
+    # 明显超出 ±1 天容忍窗口的陈旧日期，用来验证"只改时区没改日期"会被拦下。
+    try:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        stale = (datetime.now(ZoneInfo(expected)).date() - timedelta(days=5)).isoformat()
+    except Exception:
+        stale = "2000-01-01"
+
+    def env_body(tz, date=today, text_prefix=""):
+        text = "%s<environment_context>\n  <current_date>%s</current_date>\n  <timezone>%s</timezone>\n</environment_context>" % (text_prefix, date, tz)
+        return {"input": [{"type": "message", "role": "user",
+                           "content": [{"type": "input_text", "text": text}]}]}
+
+    def search_body(location, prompt=None):
+        body = {"settings": {"user_location": location}}
+        if prompt is not None:
+            body["input"] = [{"type": "message", "role": "user",
+                              "content": [{"type": "input_text", "text": prompt}]}]
+        return body
+
+    checks = [
+        ("时区正样本被误报", timezone_env_problems(env_body(expected), SENTINEL_TZ, expected, "T"), []),
+        ("环境块仍是探针时区",
+         timezone_env_problems(env_body(SENTINEL_TZ), SENTINEL_TZ, expected, "T"), "未被改写"),
+        ("环境块时区丢失", timezone_env_problems({"input": "hi"}, SENTINEL_TZ, expected, "T"),
+         "没有 <timezone>"),
+        ("环境块时区被改成别的区",
+         timezone_env_problems(env_body("Asia/Shanghai"), SENTINEL_TZ, expected, "T"), "!= 期望"),
+        ("声明期望值时未改写不报错",
+         timezone_env_problems(env_body(SENTINEL_TZ), SENTINEL_TZ, "", "T"), []),
+        ("user_location 正样本被误报",
+         search_location_problems(search_body({"timezone": expected}), SENTINEL_TZ, expected, "T"), []),
+        ("user_location 仍是探针时区",
+         search_location_problems(search_body({"timezone": SENTINEL_TZ}), SENTINEL_TZ, expected, "T"),
+         "未被改写"),
+        ("user_location 整个消失",
+         search_location_problems(search_body({}), SENTINEL_TZ, expected, "T"), "不该消失"),
+        ("prompt 副本没跟着改",
+         search_location_problems(
+             search_body({"timezone": expected},
+                         prompt='Search settings JSON:\n{"user_location":{"timezone":"%s"}}' % SENTINEL_TZ),
+             SENTINEL_TZ, expected, "T"), "settings 副本"),
+    ]
+    if dates:
+        checks.append(("只改时区没改日期",
+                       timezone_env_problems(env_body(expected, date=stale), SENTINEL_TZ, expected, "T"),
+                       "只改时区没改日期"))
+
+    for name, problems, expect in checks:
+        hit = (not problems) if expect == [] else any(expect in p for p in problems)
+        if not hit:
+            print("[SELFTEST FAIL] 时区反例「%s」判定错误，实得：%s" % (name, problems))
+            failures += 1
+        else:
+            print("  [ok] 时区样本判定正确：%s" % name)
+    return failures
 
 
 def selftest_ws():
@@ -749,7 +961,9 @@ def ws_probe(session, problems):
             payload = {"type": "response.create", "model": "gpt-5.4", "stream": True,
                        "prompt_cache_key": session,
                        "client_metadata": meta(session, WINDOW_NUMBER + turn - 1),
-                       "input": [{"type": "message", "role": "user", "content": "hi %d" % turn}]}
+                       "input": [{"type": "message", "role": "user",
+                                  "content": [{"type": "input_text", "text": env_context()}]},
+                                 {"type": "message", "role": "user", "content": "hi %d" % turn}]}
             sock.sendall(ws_frame(json.dumps(payload)))
             print("  sent: WS 第%d轮 response.create" % turn, flush=True)
             if not ws_drain(sock, 4):
@@ -837,6 +1051,8 @@ def check_ws(rows, problems):
                 problems.append("WS 第%d轮帧关系不成立 %s(%r) != %s(%r)" % (i, left, lv, right, rv))
         if meta_body is not None and meta_body.get("tool_namespaces_info") != TOOLS:
             problems.append("WS 第%d轮帧体内工具清单被误删或改写" % i)
+        # 时区替换在 WS 路径同样生效（逐帧改写，见 applyCodexRequestTimezoneRaw）。
+        problems += timezone_env_problems(fb, SENTINEL_TZ, EXPECTED_TZ, "WS 第%d轮帧" % i)
         for field in ("session_id", "thread_id", "x-codex-installation-id"):
             if not cm.get(field):
                 problems.append("WS 第%d轮帧 client_metadata 缺 %s" % (i, field))
@@ -863,13 +1079,31 @@ def send(case):
     print("  sent: %-16s curl_rc=%d" % (case["label"], proc.returncode), flush=True)
 
 
+def warm_up_timezone_probe(wait_seconds=5.0):
+    """先发一条带环境块的请求，让网关把"代理出口 IP -> 时区"的异步探测跑完并落缓存。
+    这条请求产生的捕获行在 start 之前读取，不参与断言。"""
+    if not EXPECTED_TZ:
+        return
+    probe = {"label": "W 热身", "path": "/v1/responses", "contract": "responses",
+             "upstream": "/backend-api/codex/responses",
+             "body": resp_body(sid(9)), "headers": codex_headers(sid(9))}
+    print("== 时区热身：先让网关完成一次代理时区探测 ==", flush=True)
+    send(probe)
+    time.sleep(wait_seconds)
+
+
 def main():
     if not KEY or any(ch in KEY for ch in "\r\n"):
         print("需要通过 SUB2API_REHEARSAL_API_KEY 提供有效的预演凭据", file=sys.stderr)
         return 2
     cases = build_cases()
+    warm_up_timezone_probe()
     start = sum(1 for _ in open(CAP))
     problems = []
+    if EXPECTED_TZ:
+        print("时区断言：期望 %s（探针故意发 %s）" % (EXPECTED_TZ, SENTINEL_TZ), flush=True)
+    else:
+        print("时区断言：跳过（未设置 SUB2API_REHEARSAL_TIMEZONE）", flush=True)
     print("== 发送 %d 个 HTTP 用例 + 1 条 WS 会话（全部落在 echo server，不出网） ==" % len(cases),
           flush=True)
     for case in cases:

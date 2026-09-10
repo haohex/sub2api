@@ -643,6 +643,8 @@ export default {
         codexFingerprintModeDesc: 'When multiple users share the same OAuth account, converge device/session identifiers to account-level stable values to reduce upstream-visible device and session count. Off by default (client identifiers pass through as-is); opt in explicitly when needed. Some accounts reported quota shrinkage after enabling convergence, so choose based on your own measurements.',
         codexFingerprintConvergence: 'Experimental fingerprint convergence (klno)',
         codexFingerprintConvergenceDesc: "Make this account's outbound identity match a real Codex client on HTTP and WS: forward session-id / thread-id headers, x-client-request-id equals thread-id, drop session_id / conversation_id aliases, derive root_turn_id and related fields consistently, keep UUIDv7. Off means upstream behaviour; enabling rotates the account's session identifiers once.",
+        codexRequestTimezone: 'Request timezone replacement (klno)',
+        codexRequestTimezoneDesc: "Rewrite the <timezone> and <current_date> inside the outbound <environment_context> to the timezone of this account's proxy exit IP, so a US account is not driven by an Asian-timezone client. The timezone is resolved through the proxy (ip-api, cached 6h, never blocking the request path); no effect when the account has no proxy. Off means upstream behaviour.",
         codexFingerprintOff: 'Off (passthrough, default)',
         codexFingerprintDevice: 'Device only',
         codexFingerprintSession: 'Device + Session',
