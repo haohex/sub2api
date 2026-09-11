@@ -59,6 +59,13 @@ func timezoneTestBody(timezone, date string) map[string]any {
 	}
 }
 
+func mustType[T any](t *testing.T, value any) T {
+	t.Helper()
+	got, ok := value.(T)
+	require.True(t, ok)
+	return got
+}
+
 // --- 开关解析 ---
 
 func TestCodexRequestTimezoneFromAccount(t *testing.T) {
@@ -142,7 +149,11 @@ func TestRewriteCodexRequestTimezoneMap(t *testing.T) {
 	t.Run("input 数组内文本项", func(t *testing.T) {
 		body := timezoneTestBody("Asia/Shanghai", "2026-06-20")
 		require.True(t, rewriteCodexRequestTimezoneMap(body, "America/Los_Angeles", now))
-		text := body["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+		input := mustType[[]any](t, body["input"])
+		message := mustType[map[string]any](t, input[0])
+		content := mustType[[]any](t, message["content"])
+		textItem := mustType[map[string]any](t, content[0])
+		text := mustType[string](t, textItem["text"])
 		assert.Contains(t, text, "<timezone>America/Los_Angeles</timezone>")
 		assert.NotContains(t, text, "Asia/Shanghai")
 	})
@@ -150,7 +161,8 @@ func TestRewriteCodexRequestTimezoneMap(t *testing.T) {
 	t.Run("input 为字符串", func(t *testing.T) {
 		body := map[string]any{"input": "<environment_context><timezone>Asia/Shanghai</timezone></environment_context>"}
 		require.True(t, rewriteCodexRequestTimezoneMap(body, "America/Los_Angeles", now))
-		assert.Contains(t, body["input"].(string), "<timezone>America/Los_Angeles</timezone>")
+		input := mustType[string](t, body["input"])
+		assert.Contains(t, input, "<timezone>America/Los_Angeles</timezone>")
 	})
 
 	t.Run("无环境块返回 false", func(t *testing.T) {
@@ -167,7 +179,11 @@ func TestRewriteCodexRequestTimezoneRaw(t *testing.T) {
 		var decoded map[string]any
 		require.NoError(t, json.Unmarshal(body, &decoded), "改写后仍是合法 JSON")
 		assert.Equal(t, "gpt-5.4", decoded["model"], "其它字段不动")
-		return decoded["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+		input := mustType[[]any](t, decoded["input"])
+		message := mustType[map[string]any](t, input[0])
+		content := mustType[[]any](t, message["content"])
+		textItem := mustType[map[string]any](t, content[0])
+		return mustType[string](t, textItem["text"])
 	}
 
 	t.Run("字面量形态（Codex CLI / serde_json）", func(t *testing.T) {
@@ -268,12 +284,17 @@ func TestBuildOpenAIAlphaSearchResponsesWebSearchBodyTimezone(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(body, &payload))
 
-	tool := payload["tools"].([]any)[0].(map[string]any)
-	location := tool["user_location"].(map[string]any)
+	tools := mustType[[]any](t, payload["tools"])
+	tool := mustType[map[string]any](t, tools[0])
+	location := mustType[map[string]any](t, tool["user_location"])
 	assert.Equal(t, "America/Los_Angeles", location["timezone"], "工具侧位置时区被替换")
 	assert.Equal(t, "Shanghai", location["city"])
 
-	prompt := payload["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	input := mustType[[]any](t, payload["input"])
+	message := mustType[map[string]any](t, input[0])
+	content := mustType[[]any](t, message["content"])
+	textItem := mustType[map[string]any](t, content[0])
+	prompt := mustType[string](t, textItem["text"])
 	assert.Contains(t, prompt, "America/Los_Angeles", "prompt 里那份 settings JSON 也要同值")
 	assert.NotContains(t, prompt, "Asia/Shanghai")
 

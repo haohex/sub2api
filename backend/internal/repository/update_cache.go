@@ -8,7 +8,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const updateCacheKey = "update:latest"
+// Keep update metadata isolated from caches written by an upstream build.
+const updateCacheKey = "update:latest:luohao830"
 
 type updateCache struct {
 	rdb *redis.Client
