@@ -43,3 +43,16 @@ type UserSubscriptionRepository interface {
 
 	BatchUpdateExpiredStatus(ctx context.Context) (int64, error)
 }
+
+// FiveHourSubscriptionQuotaRepository is an optional extension that keeps
+// existing repository fakes source-compatible while exposing the rolling
+// five-hour reset to the concrete persistence layer.
+type FiveHourSubscriptionQuotaRepository interface {
+	ResetFiveHourUsage(ctx context.Context, id int64, newWindowStart time.Time) error
+}
+
+// AtomicSubscriptionUsageWindowsResetRepository is an optional extension for
+// resetting several windows in one database update.
+type AtomicSubscriptionUsageWindowsResetRepository interface {
+	ResetUsageWindowsAtomically(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly, resetFiveHour bool, dailyStart, periodicStart time.Time) error
+}

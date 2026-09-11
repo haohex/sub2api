@@ -148,6 +148,11 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	}
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
+		QuotaResetSourceAccountID:   g.QuotaResetSourceAccountID,
+		QuotaResetSourceAccountName: g.QuotaResetSourceAccountName,
+		QuotaResetSourceResetAt:     g.QuotaResetSourceResetAt,
+		QuotaResetIncludeMonthly:    g.QuotaResetIncludeMonthly,
+		QuotaResetSourceStatus:      quotaResetSourceStatus(g),
 		ForceOpenAIFast:             g.ForceOpenAIFast,
 		FreeOpenAIFast:              g.FreeOpenAIFast,
 		ProfitControlEnabled:        g.ProfitControlEnabled,
@@ -177,6 +182,19 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	return out
 }
 
+func quotaResetSourceStatus(g *service.Group) string {
+	if g == nil || g.QuotaResetSourceAccountID == nil {
+		return "disabled"
+	}
+	if !g.QuotaResetSourceValid {
+		return "invalid"
+	}
+	if g.QuotaResetSourceResetAt == nil {
+		return "waiting"
+	}
+	return "active"
+}
+
 func groupFromServiceBase(g *service.Group) Group {
 	return Group{
 		ID:                              g.ID,
@@ -190,6 +208,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		DailyLimitUSD:                   g.DailyLimitUSD,
 		WeeklyLimitUSD:                  g.WeeklyLimitUSD,
 		MonthlyLimitUSD:                 g.MonthlyLimitUSD,
+		FiveHourLimitUSD:                g.FiveHourLimitUSD,
 		LongContextPricingEnabled:       g.LongContextPricingEnabled,
 		AllowImageGeneration:            g.AllowImageGeneration,
 		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,
@@ -882,23 +901,25 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 
 func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscription {
 	return UserSubscription{
-		ID:                 sub.ID,
-		UserID:             sub.UserID,
-		GroupID:            sub.GroupID,
-		StartsAt:           sub.StartsAt,
-		ExpiresAt:          sub.ExpiresAt,
-		Status:             sub.Status,
-		DailyWindowStart:   sub.DailyWindowStart,
-		WeeklyWindowStart:  sub.WeeklyWindowStart,
-		MonthlyWindowStart: sub.MonthlyWindowStart,
-		DailyUsageUSD:      sub.DailyUsageUSD,
-		WeeklyUsageUSD:     sub.WeeklyUsageUSD,
-		MonthlyUsageUSD:    sub.MonthlyUsageUSD,
-		CreatedAt:          sub.CreatedAt,
-		UpdatedAt:          sub.UpdatedAt,
-		RevokedAt:          sub.DeletedAt,
-		User:               UserFromServiceShallow(sub.User),
-		Group:              GroupFromServiceShallow(sub.Group),
+		ID:                  sub.ID,
+		UserID:              sub.UserID,
+		GroupID:             sub.GroupID,
+		StartsAt:            sub.StartsAt,
+		ExpiresAt:           sub.ExpiresAt,
+		Status:              sub.Status,
+		DailyWindowStart:    sub.DailyWindowStart,
+		WeeklyWindowStart:   sub.WeeklyWindowStart,
+		MonthlyWindowStart:  sub.MonthlyWindowStart,
+		DailyUsageUSD:       sub.DailyUsageUSD,
+		WeeklyUsageUSD:      sub.WeeklyUsageUSD,
+		MonthlyUsageUSD:     sub.MonthlyUsageUSD,
+		FiveHourWindowStart: sub.FiveHourWindowStart,
+		FiveHourUsageUSD:    sub.FiveHourUsageUSD,
+		CreatedAt:           sub.CreatedAt,
+		UpdatedAt:           sub.UpdatedAt,
+		RevokedAt:           sub.DeletedAt,
+		User:                UserFromServiceShallow(sub.User),
+		Group:               GroupFromServiceShallow(sub.Group),
 	}
 }
 
