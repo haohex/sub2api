@@ -637,7 +637,12 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
+// compareVersions compares two semantic versions.
+//
+// Fork releases use a -klno.N suffix to distinguish patches built from the
+// same upstream version. Keep other build suffixes ignored for compatibility
+// with custom builds, but include the fork revision in ordering when both
+// versions use it.
 func compareVersions(current, latest string) int {
 	currentParts := parseVersion(current)
 	latestParts := parseVersion(latest)
@@ -650,11 +655,12 @@ func compareVersions(current, latest string) int {
 			return 1
 		}
 	}
-	return 0
+
+	return compareKlnoRevisions(current, latest)
 }
 
 func parseVersion(v string) [3]int {
-	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if idx := strings.IndexByte(v, '-'); idx != -1 {
 		v = v[:idx]
 	}
@@ -666,4 +672,39 @@ func parseVersion(v string) [3]int {
 		}
 	}
 	return result
+}
+
+func compareKlnoRevisions(current, latest string) int {
+	currentRevision, currentOK := parseKlnoRevision(current)
+	latestRevision, latestOK := parseKlnoRevision(latest)
+	if !currentOK || !latestOK {
+		return 0
+	}
+	if currentRevision < latestRevision {
+		return -1
+	}
+	if currentRevision > latestRevision {
+		return 1
+	}
+	return 0
+}
+
+func parseKlnoRevision(v string) (int, bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	idx := strings.IndexByte(v, '-')
+	if idx == -1 {
+		return 0, false
+	}
+
+	const suffixPrefix = "klno."
+	suffix := v[idx+1:]
+	if !strings.HasPrefix(suffix, suffixPrefix) {
+		return 0, false
+	}
+
+	revision, err := strconv.Atoi(strings.TrimPrefix(suffix, suffixPrefix))
+	if err != nil || revision < 0 {
+		return 0, false
+	}
+	return revision, true
 }
