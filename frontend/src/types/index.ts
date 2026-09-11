@@ -571,6 +571,7 @@ export interface Group {
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
   monthly_limit_usd: number | null
+  five_hour_limit_usd: number | null
   long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
@@ -618,6 +619,11 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+	quota_reset_source_account_id?: number | null
+	quota_reset_source_account_name?: string
+	quota_reset_source_reset_at?: string | null
+	quota_reset_include_monthly?: boolean
+	quota_reset_source_status?: 'disabled' | 'waiting' | 'active' | 'invalid' | string
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -791,6 +797,9 @@ export interface CreateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  five_hour_limit_usd?: number | null
+  quota_reset_source_account_id?: number | null
+  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -857,6 +866,9 @@ export interface UpdateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  five_hour_limit_usd?: number | null
+  quota_reset_source_account_id?: number | null
+  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -2051,9 +2063,11 @@ export interface UserSubscription {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  five_hour_usage_usd: number
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
+  five_hour_window_start: string | null
   created_at: string
   updated_at: string
   revoked_at?: string | null
@@ -2077,6 +2091,12 @@ export interface SubscriptionProgress {
     reset_in_seconds: number | null
   } | null
   monthly: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  five_hour: {
     used: number
     limit: number | null
     percentage: number
