@@ -163,6 +163,8 @@ func NewCodexRequestTimezoneResolver(prober ProxyExitInfoProber) *CodexRequestTi
 func (r *CodexRequestTimezoneResolver) TimezoneForAccount(account *Account) string {
 	setting := codexRequestTimezoneFromAccount(account)
 	switch setting.mode {
+	case codexRequestTimezoneOff:
+		return ""
 	case codexRequestTimezoneFixed:
 		return setting.name
 	case codexRequestTimezoneAuto:
