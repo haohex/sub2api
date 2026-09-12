@@ -109,6 +109,8 @@ func TestCompareVersionsOrdersForkRevisions(t *testing.T) {
 		{name: "newer hao revision", current: "v0.2.4-hao.9", latest: "0.2.4-hao.8", want: 1},
 		{name: "hao release is newer than historical klno", current: "0.2.4-hao.8", latest: "0.2.4-klno.7", want: 1},
 		{name: "hao release follows historical klno", current: "0.2.4-klno.7", latest: "0.2.4-hao.8", want: -1},
+		{name: "next hao base version", current: "0.2.4-hao.9", latest: "0.2.5-hao.1", want: -1},
+		{name: "future hao base version", current: "0.2.5-hao.1", latest: "0.2.6-hao.1", want: -1},
 		{name: "core version wins", current: "0.2.4-klno.99", latest: "0.2.5-klno.1", want: -1},
 		{name: "custom suffix remains ignored", current: "0.2.4-custom", latest: "0.2.4", want: 0},
 		{name: "whitespace is ignored", current: " v0.2.4-klno.6 ", latest: "0.2.4-klno.7", want: -1},
