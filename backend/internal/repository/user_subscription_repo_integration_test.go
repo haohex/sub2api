@@ -843,9 +843,43 @@ func (s *UserSubscriptionRepoSuite) TestUpdate_NilInput() {
 // --- 并发用量更新测试 ---
 
 func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
-	user := s.mustCreateUser("concurrent@test.com", service.RoleUser)
-	group := s.mustCreateGroup("g-concurrent")
-	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
+	// The suite's default client is bound to one rollback transaction. Ent's
+	// transaction driver is not goroutine-safe, so use the shared client here
+	// and let each IncrementUsage call create its own transaction/connection.
+	client := testEntClient(s.T())
+	repo := NewUserSubscriptionRepository(client).(*userSubscriptionRepository)
+	now := time.Now()
+	user, err := client.User.Create().
+		SetEmail(fmt.Sprintf("concurrent-%d@test.com", now.UnixNano())).
+		SetPasswordHash("test-password-hash").
+		SetStatus(service.StatusActive).
+		SetRole(service.RoleUser).
+		Save(s.ctx)
+	s.Require().NoError(err, "create concurrent user")
+	group, err := client.Group.Create().
+		SetName(fmt.Sprintf("g-concurrent-%d", now.UnixNano())).
+		SetStatus(service.StatusActive).
+		Save(s.ctx)
+	s.Require().NoError(err, "create concurrent group")
+	sub, err := client.UserSubscription.Create().
+		SetUserID(user.ID).
+		SetGroupID(group.ID).
+		SetStartsAt(now.Add(-1 * time.Hour)).
+		SetExpiresAt(now.Add(24 * time.Hour)).
+		SetStatus(service.SubscriptionStatusActive).
+		SetAssignedAt(now).
+		SetNotes("").
+		Save(s.ctx)
+	s.Require().NoError(err, "create concurrent subscription")
+	s.T().Cleanup(func() {
+		// These rows were created outside the suite rollback transaction so the
+		// concurrent calls can use independent connections. Remove them before
+		// the next test observes committed subscription counts.
+		cleanupCtx := context.Background()
+		_, _ = client.ExecContext(cleanupCtx, "DELETE FROM user_subscriptions WHERE id = $1", sub.ID)
+		_, _ = client.ExecContext(cleanupCtx, "DELETE FROM groups WHERE id = $1", group.ID)
+		_, _ = client.ExecContext(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
 
 	const numGoroutines = 10
 	const incrementPerGoroutine = 1.5
@@ -854,7 +888,7 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
 	errCh := make(chan error, numGoroutines)
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
-			errCh <- s.repo.IncrementUsage(s.ctx, sub.ID, incrementPerGoroutine)
+			errCh <- repo.IncrementUsage(s.ctx, sub.ID, incrementPerGoroutine)
 		}()
 	}
 
@@ -865,7 +899,7 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
 	}
 
 	// 验证累加结果正确
-	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	got, err := repo.GetByID(s.ctx, sub.ID)
 	s.Require().NoError(err)
 	expectedUsage := float64(numGoroutines) * incrementPerGoroutine
 	s.Require().InDelta(expectedUsage, got.DailyUsageUSD, 1e-6, "daily usage should be correctly accumulated")
