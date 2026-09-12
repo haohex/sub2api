@@ -59,10 +59,10 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{
-			release: &GitHubRelease{
+			recentReleases: []*GitHubRelease{{
 				TagName: "v0.1.132",
 				Name:    "v0.1.132",
-			},
+			}},
 		},
 		"0.1.132",
 		"release",
@@ -77,8 +77,10 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 
 func TestUpdateServiceUsesForkReleaseRepository(t *testing.T) {
 	client := &updateServiceGitHubClientStub{
-		release:        &GitHubRelease{TagName: "v0.2.4-klno.5"},
-		recentReleases: []*GitHubRelease{{TagName: "v0.2.4-klno.4"}},
+		recentReleases: []*GitHubRelease{
+			{TagName: "v0.2.4-klno.5"},
+			{TagName: "v0.2.4-klno.4"},
+		},
 	}
 	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.2.4-klno.5", "release")
 
@@ -89,7 +91,6 @@ func TestUpdateServiceUsesForkReleaseRepository(t *testing.T) {
 	require.Len(t, versions, 1)
 	require.Equal(t, "0.2.4-klno.4", versions[0].Version)
 
-	require.Equal(t, "luohao830/sub2api", client.latestRepo)
 	require.Equal(t, "luohao830/sub2api", client.recentRepo)
 	require.Equal(t, rollbackFetchPageSize, client.recentPerPage)
 }
@@ -104,6 +105,10 @@ func TestCompareVersionsOrdersForkRevisions(t *testing.T) {
 		{name: "older fork revision", current: "0.2.4-klno.6", latest: "0.2.4-klno.7", want: -1},
 		{name: "newer fork revision", current: "v0.2.4-klno.7", latest: "0.2.4-klno.6", want: 1},
 		{name: "same fork revision", current: "0.2.4-klno.7", latest: "0.2.4-klno.7", want: 0},
+		{name: "older hao revision", current: "0.2.4-hao.8", latest: "0.2.4-hao.9", want: -1},
+		{name: "newer hao revision", current: "v0.2.4-hao.9", latest: "0.2.4-hao.8", want: 1},
+		{name: "hao release is newer than historical klno", current: "0.2.4-hao.8", latest: "0.2.4-klno.7", want: 1},
+		{name: "hao release follows historical klno", current: "0.2.4-klno.7", latest: "0.2.4-hao.8", want: -1},
 		{name: "core version wins", current: "0.2.4-klno.99", latest: "0.2.5-klno.1", want: -1},
 		{name: "custom suffix remains ignored", current: "0.2.4-custom", latest: "0.2.4", want: 0},
 		{name: "whitespace is ignored", current: " v0.2.4-klno.6 ", latest: "0.2.4-klno.7", want: -1},
@@ -135,9 +140,29 @@ func TestUpdateServiceListRollbackVersionsIncludesForkRevisions(t *testing.T) {
 	require.Equal(t, "0.2.4-klno.4", versions[2].Version)
 }
 
+func TestUpdateServiceListRollbackVersionsIncludesHaoAndHistoricalKlnoReleases(t *testing.T) {
+	releases := []*GitHubRelease{
+		{TagName: "v0.2.4-hao.9"}, // current: excluded
+		{TagName: "v0.2.4-hao.8"},
+		{TagName: "v0.2.4-klno.7"},
+		{TagName: "v0.2.4-klno.6"},
+		{TagName: "v0.2.4-klno.5"},
+		{TagName: "v0.2.4-hao.10", Prerelease: true}, // prerelease: excluded
+	}
+	svc := newRollbackTestService("0.2.4-hao.9", releases)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, versions, 3)
+	require.Equal(t, "0.2.4-hao.8", versions[0].Version)
+	require.Equal(t, "0.2.4-klno.7", versions[1].Version)
+	require.Equal(t, "0.2.4-klno.6", versions[2].Version)
+}
+
 func TestUpdateServiceCheckUpdateRecognizesForkRevision(t *testing.T) {
 	client := &updateServiceGitHubClientStub{
-		release: &GitHubRelease{TagName: "v0.2.4-klno.7"},
+		recentReleases: []*GitHubRelease{{TagName: "v0.2.4-klno.7"}},
 	}
 	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.2.4-klno.6", "release")
 
@@ -145,6 +170,37 @@ func TestUpdateServiceCheckUpdateRecognizesForkRevision(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, info.HasUpdate)
+}
+
+func TestUpdateServiceCheckUpdateRecognizesHaoRevision(t *testing.T) {
+	client := &updateServiceGitHubClientStub{
+		recentReleases: []*GitHubRelease{{TagName: "v0.2.4-hao.9"}},
+	}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.2.4-hao.8", "release")
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.True(t, info.HasUpdate)
+}
+
+func TestUpdateServiceCheckUpdateIncludesPrereleaseAsLatest(t *testing.T) {
+	client := &updateServiceGitHubClientStub{
+		recentReleases: []*GitHubRelease{
+			{TagName: "v0.2.4-hao.11", Draft: true},
+			{TagName: "v0.2.4-hao.10", Prerelease: true},
+		},
+	}
+	current := "0.2.4-hao.9"
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, current, "release")
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.True(t, info.HasUpdate)
+	require.Equal(t, current, info.CurrentVersion)
+	require.Equal(t, "0.2.4-hao.10", info.LatestVersion)
+	require.NotNil(t, info.ReleaseInfo)
 }
 
 func TestUpdateServiceRollbackToVersionAcceptsForkRevision(t *testing.T) {
