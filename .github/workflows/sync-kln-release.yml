@@ -32,12 +32,12 @@ jobs:
         with:
           ref: ${{ env.BASE_BRANCH }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
       - name: Resolve KlN release
         id: release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
@@ -74,7 +74,7 @@ jobs:
       - name: Check for an existing KlN sync PR
         id: state
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag }}
           BRANCH: ${{ steps.release.outputs.branch }}
@@ -146,7 +146,7 @@ jobs:
       - name: Create review PR
         if: steps.state.outputs.skip != 'true' && steps.prepare.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag }}
           BRANCH: ${{ steps.release.outputs.branch }}
@@ -168,5 +168,5 @@ jobs:
             --repo "$REPOSITORY" \
             --base "$BASE_BRANCH" \
             --head "$BRANCH" \
-            --title "sync: KlN-4096/sub2api $TAG" \
+            --title "ci(上游同步): 同步 KlN 正式版本 $TAG" \
             --body-file release-body.md
