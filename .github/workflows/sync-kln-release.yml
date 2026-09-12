@@ -1,0 +1,172 @@
+name: Sync latest KlN release to main
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional KlN release tag; empty means the latest stable release'
+        required: false
+        type: string
+
+concurrency:
+  group: sync-kln-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  SOURCE_REPO: KlN-4096/sub2api
+  BASE_BRANCH: main
+  SYNC_BRANCH_PREFIX: sync/kln-release
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve KlN release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          release_json=$(mktemp)
+          if [ -n "$RELEASE_TAG_INPUT" ]; then
+            if [[ ! "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+              echo "::error::unexpected KlN release tag input: $RELEASE_TAG_INPUT"
+              exit 1
+            fi
+            gh api "repos/${SOURCE_REPO}/releases/tags/${RELEASE_TAG_INPUT}" > "$release_json"
+          else
+            gh api "repos/${SOURCE_REPO}/releases/latest" > "$release_json"
+          fi
+
+          tag=$(jq -r '.tag_name // empty' "$release_json")
+          draft=$(jq -r '.draft // true' "$release_json")
+          prerelease=$(jq -r '.prerelease // true' "$release_json")
+          if [ "$draft" != "false" ] || [ "$prerelease" != "false" ]; then
+            echo "::error::the selected KlN release is not a published stable release"
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::unexpected KlN release tag: $tag"
+            exit 1
+          fi
+
+          jq -r '.body // ""' "$release_json" > release-body.md
+          if [ ! -s release-body.md ]; then
+            printf 'KlN release %s\n' "$tag" > release-body.md
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'branch=%s/%s\n' "$SYNC_BRANCH_PREFIX" "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing KlN sync PR
+        id: state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+
+          open_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --state open \
+            --limit 1000 \
+            --json number,headRefName |
+            jq -r --arg prefix "${SYNC_BRANCH_PREFIX}/" \
+              '[.[] | select(.headRefName | startswith($prefix))] | .[0].number // empty')
+          if [ -n "$open_pr" ]; then
+            echo "A KlN sync PR is already open: #$open_pr"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --state all \
+            --json number,state,mergedAt |
+            jq -r '.[0].number // empty')
+          if [ -n "$existing_pr" ]; then
+            echo "Release $TAG already has PR #$existing_pr; no duplicate will be created"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare release branch
+        id: prepare
+        if: steps.state.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_BRANCH"
+          git remote add kln "https://github.com/${SOURCE_REPO}.git"
+          git fetch --force --no-tags kln "refs/tags/${TAG}:refs/tags/${TAG}"
+
+          release_sha=$(git rev-parse "${TAG}^{}")
+          base_sha=$(git rev-parse "origin/${BASE_BRANCH}")
+          if git merge-base --is-ancestor "$release_sha" "$base_sha"; then
+            echo "Release $TAG is already included in $BASE_BRANCH"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+            branch_sha=$(git rev-parse "refs/remotes/origin/${BRANCH}")
+            if [ "$branch_sha" != "$release_sha" ]; then
+              echo "::error::existing branch $BRANCH does not point at $TAG; refusing to overwrite it"
+              exit 1
+            fi
+            echo "Reusing existing branch $BRANCH"
+            exit 0
+          fi
+
+          git switch --create "$BRANCH" "$release_sha"
+          git push --set-upstream origin "$BRANCH"
+
+      - name: Create review PR
+        if: steps.state.outputs.skip != 'true' && steps.prepare.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          existing_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --state all \
+            --json number |
+            jq -r '.[0].number // empty')
+          if [ -n "$existing_pr" ]; then
+            echo "PR #$existing_pr already exists"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --title "sync: KlN-4096/sub2api $TAG" \
+            --body-file release-body.md
