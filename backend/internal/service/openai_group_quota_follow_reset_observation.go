@@ -8,6 +8,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const openAIWeeklyQuotaWindowMinutes int64 = 7 * 24 * 60
+
 func isDefaultCodexRateLimitEvent(payload []byte) bool {
 	limitName := strings.TrimSpace(gjson.GetBytes(payload, "metered_limit_name").String())
 	if limitName == "" {
@@ -33,7 +35,7 @@ func observeOpenAIWeeklyResetEvent(ctx context.Context, account *Account, payloa
 	for _, name := range []string{"primary", "secondary"} {
 		window := gjson.GetBytes(payload, "rate_limits."+name)
 		minutes := window.Get("window_minutes")
-		if minutes.Type != gjson.Number || minutes.Float() != float64(minutes.Int()) || minutes.Int() <= 360 {
+		if minutes.Type != gjson.Number || minutes.Float() != float64(minutes.Int()) || !isOpenAIWeeklyQuotaWindowMinutes(minutes.Int()) {
 			continue
 		}
 		resetAt := window.Get("reset_at")
@@ -42,4 +44,9 @@ func observeOpenAIWeeklyResetEvent(ctx context.Context, account *Account, payloa
 			return
 		}
 	}
+}
+
+func isOpenAIWeeklyQuotaWindowMinutes(minutes int64) bool {
+	// Only the explicit 7-day window can drive weekly group resets.
+	return minutes == openAIWeeklyQuotaWindowMinutes
 }

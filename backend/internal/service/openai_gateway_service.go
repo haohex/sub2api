@@ -153,10 +153,10 @@ func (s *OpenAICodexUsageSnapshot) WeeklyResetAt() (time.Time, bool) {
 	if s == nil {
 		return time.Time{}, false
 	}
-	if s.PrimaryWindowMinutes != nil && *s.PrimaryWindowMinutes > 360 && s.PrimaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.PrimaryResetAtUnix) {
+	if s.PrimaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.PrimaryWindowMinutes)) && s.PrimaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.PrimaryResetAtUnix) {
 		return time.Unix(*s.PrimaryResetAtUnix, 0).UTC(), true
 	}
-	if s.SecondaryWindowMinutes != nil && *s.SecondaryWindowMinutes > 360 && s.SecondaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.SecondaryResetAtUnix) {
+	if s.SecondaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.SecondaryWindowMinutes)) && s.SecondaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.SecondaryResetAtUnix) {
 		return time.Unix(*s.SecondaryResetAtUnix, 0).UTC(), true
 	}
 	return time.Time{}, false

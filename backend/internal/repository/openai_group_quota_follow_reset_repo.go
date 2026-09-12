@@ -54,17 +54,20 @@ func (r *openAIGroupQuotaFollowResetRepository) ObserveWeeklyReset(ctx context.C
 	if err != nil && !firstObservation {
 		return 0, err
 	}
-	if !firstObservation && !resetAt.After(previous) {
+	repeatedObservation := !firstObservation && resetAt.Equal(previous)
+	if !firstObservation && !repeatedObservation && !openAIWeeklyResetAdvanced(previous, resetAt, observedAt) {
 		return 0, nil
 	}
-	_, err = tx.ExecContext(ctx, `
+	if !repeatedObservation {
+		_, err = tx.ExecContext(ctx, `
 		INSERT INTO openai_oauth_weekly_reset_observations (account_id, reset_at, observed_at)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (account_id) DO UPDATE
 		SET reset_at = EXCLUDED.reset_at, observed_at = EXCLUDED.observed_at, updated_at = NOW()
 	`, accountID, resetAt, observedAt)
-	if err != nil {
-		return 0, err
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -109,7 +112,7 @@ func (r *openAIGroupQuotaFollowResetRepository) ObserveWeeklyReset(ctx context.C
 			}
 			continue
 		}
-		if !resetAt.After(target.baseline.Time) {
+		if !openAIWeeklyResetAdvanced(target.baseline.Time, resetAt, observedAt) {
 			continue
 		}
 		result, err := tx.ExecContext(ctx, `
@@ -132,6 +135,18 @@ func (r *openAIGroupQuotaFollowResetRepository) ObserveWeeklyReset(ctx context.C
 		return 0, err
 	}
 	return created, nil
+}
+
+const openAIWeeklyResetMinAdvance = (7 * 24 * time.Hour) / 2
+
+func openAIWeeklyResetAdvanced(previous, next, observedAt time.Time) bool {
+	if previous.IsZero() || next.IsZero() || observedAt.IsZero() {
+		return false
+	}
+	// The previous reset_at is the end of the active window. Require that
+	// window to have elapsed and the next value to resemble another weekly
+	// window, filtering seconds-level upstream clock drift.
+	return !observedAt.Before(previous) && next.Sub(previous) >= openAIWeeklyResetMinAdvance
 }
 
 func (r *openAIGroupQuotaFollowResetRepository) ProcessNextPending(ctx context.Context) (_ *service.GroupQuotaFollowResetResult, err error) {
