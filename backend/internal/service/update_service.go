@@ -30,7 +30,7 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	githubRepo     = "luohao830/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -400,12 +400,29 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	// GitHub's /releases/latest endpoint excludes prereleases. The fork's
+	// refresh action intentionally follows the newest published release,
+	// including prereleases, so scan the recent release list instead.
+	releases, err := s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
 	if err != nil {
 		return nil, err
 	}
+	var release *GitHubRelease
+	for _, candidate := range releases {
+		if candidate == nil || candidate.Draft || strings.TrimSpace(candidate.TagName) == "" {
+			continue
+		}
+		release = candidate
+		break
+	}
+	if release == nil {
+		return nil, fmt.Errorf("GitHub latest release is empty")
+	}
 
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	latestVersion := strings.TrimSpace(strings.TrimPrefix(release.TagName, "v"))
+	if latestVersion == "" {
+		return nil, fmt.Errorf("GitHub latest release has no tag")
+	}
 
 	assets := make([]Asset, len(release.Assets))
 	for i, a := range release.Assets {
@@ -637,7 +654,11 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
+// compareVersions compares two semantic versions.
+//
+// Fork releases use a -hao.N suffix; historical -klno.N tags remain valid
+// rollback targets. Keep unknown build suffixes ignored for compatibility with
+// custom builds, but include known fork revisions in ordering.
 func compareVersions(current, latest string) int {
 	currentParts := parseVersion(current)
 	latestParts := parseVersion(latest)
@@ -650,11 +671,12 @@ func compareVersions(current, latest string) int {
 			return 1
 		}
 	}
-	return 0
+
+	return compareForkRevisions(current, latest)
 }
 
 func parseVersion(v string) [3]int {
-	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if idx := strings.IndexByte(v, '-'); idx != -1 {
 		v = v[:idx]
 	}
@@ -666,4 +688,67 @@ func parseVersion(v string) [3]int {
 		}
 	}
 	return result
+}
+
+func compareForkRevisions(current, latest string) int {
+	currentFamily, currentRevision, currentOK := parseForkRevision(current)
+	latestFamily, latestRevision, latestOK := parseForkRevision(latest)
+	if !currentOK || !latestOK {
+		return 0
+	}
+	if currentFamily != latestFamily {
+		currentRank, currentRankOK := forkRevisionFamilyRank(currentFamily)
+		latestRank, latestRankOK := forkRevisionFamilyRank(latestFamily)
+		if !currentRankOK || !latestRankOK {
+			return 0
+		}
+		if currentRank < latestRank {
+			return -1
+		}
+		if currentRank > latestRank {
+			return 1
+		}
+		return 0
+	}
+	if currentRevision < latestRevision {
+		return -1
+	}
+	if currentRevision > latestRevision {
+		return 1
+	}
+	return 0
+}
+
+func parseForkRevision(v string) (string, int, bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	idx := strings.IndexByte(v, '-')
+	if idx == -1 {
+		return "", 0, false
+	}
+
+	suffixParts := strings.SplitN(v[idx+1:], ".", 2)
+	if len(suffixParts) != 2 {
+		return "", 0, false
+	}
+	family := strings.ToLower(suffixParts[0])
+	if _, ok := forkRevisionFamilyRank(family); !ok {
+		return "", 0, false
+	}
+
+	revision, err := strconv.Atoi(suffixParts[1])
+	if err != nil || revision < 0 {
+		return "", 0, false
+	}
+	return family, revision, true
+}
+
+func forkRevisionFamilyRank(family string) (int, bool) {
+	switch family {
+	case "klno":
+		return 1, true
+	case "hao":
+		return 2, true
+	default:
+		return 0, false
+	}
 }

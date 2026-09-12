@@ -49,6 +49,9 @@ func cloneGroupForDuplicateTest(group *Group) *Group {
 	cloned.DailyLimitUSD = cloneGroupValuePointer(group.DailyLimitUSD)
 	cloned.WeeklyLimitUSD = cloneGroupValuePointer(group.WeeklyLimitUSD)
 	cloned.MonthlyLimitUSD = cloneGroupValuePointer(group.MonthlyLimitUSD)
+	cloned.FiveHourLimitUSD = cloneGroupValuePointer(group.FiveHourLimitUSD)
+	cloned.QuotaResetSourceAccountID = cloneGroupValuePointer(group.QuotaResetSourceAccountID)
+	cloned.QuotaResetSourceResetAt = cloneGroupValuePointer(group.QuotaResetSourceResetAt)
 	cloned.ImagePrice1K = cloneGroupValuePointer(group.ImagePrice1K)
 	cloned.ImagePrice2K = cloneGroupValuePointer(group.ImagePrice2K)
 	cloned.ImagePrice4K = cloneGroupValuePointer(group.ImagePrice4K)
@@ -137,6 +140,13 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 		DailyLimitUSD:                groupDuplicateTestPointer(11.0),
 		WeeklyLimitUSD:               groupDuplicateTestPointer(22.0),
 		MonthlyLimitUSD:              groupDuplicateTestPointer(33.0),
+		FiveHourLimitUSD:             groupDuplicateTestPointer(44.0),
+		QuotaResetSourceAccountID:    groupDuplicateTestPointer(int64(77)),
+		QuotaResetSourceAccountName:  "source@example.com",
+		QuotaResetSourceResetAt:      groupDuplicateTestPointer(time.Date(2026, 7, 8, 9, 10, 11, 0, time.UTC)),
+		QuotaResetIncludeMonthly:     true,
+		QuotaResetConfigVersion:      3,
+		QuotaResetSourceValid:        true,
 		DefaultValidityDays:          91,
 		AllowImageGeneration:         true,
 		AllowBatchImageGeneration:    true,
@@ -209,6 +219,13 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, source.RateMultiplier, duplicate.RateMultiplier)
 	require.Equal(t, source.PeakRateMultiplier, duplicate.PeakRateMultiplier)
 	require.Equal(t, source.DefaultValidityDays, duplicate.DefaultValidityDays)
+	require.Equal(t, source.FiveHourLimitUSD, duplicate.FiveHourLimitUSD)
+	require.Equal(t, source.QuotaResetSourceAccountID, duplicate.QuotaResetSourceAccountID)
+	require.Equal(t, source.QuotaResetSourceAccountName, duplicate.QuotaResetSourceAccountName)
+	require.Equal(t, source.QuotaResetSourceResetAt, duplicate.QuotaResetSourceResetAt)
+	require.Equal(t, source.QuotaResetIncludeMonthly, duplicate.QuotaResetIncludeMonthly)
+	require.Equal(t, source.QuotaResetConfigVersion, duplicate.QuotaResetConfigVersion)
+	require.True(t, duplicate.QuotaResetSourceValid)
 	require.Equal(t, source.ImagePrice4K, duplicate.ImagePrice4K)
 	require.Equal(t, source.VideoModelPrices, duplicate.VideoModelPrices)
 	require.Equal(t, source.WebSearchPricePerCall, duplicate.WebSearchPricePerCall)
