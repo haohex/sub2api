@@ -851,7 +851,11 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			group.QuotaResetSourceAccountName = ""
 			group.QuotaResetSourceResetAt = nil
 			group.QuotaResetSourceValid = false
-		} else if group.QuotaResetSourceAccountID == nil || *group.QuotaResetSourceAccountID != *input.QuotaResetSourceAccountID {
+		} else if group.QuotaResetSourceAccountID != nil && *group.QuotaResetSourceAccountID == *input.QuotaResetSourceAccountID {
+			// Preserve an unchanged source, including a deleted or otherwise
+			// invalid source, so unrelated group settings remain editable. The
+			// admin can select a different source explicitly to repair it.
+		} else {
 			if group.Platform != PlatformOpenAI || group.SubscriptionType != SubscriptionTypeSubscription {
 				return nil, infraerrors.BadRequest("INVALID_QUOTA_RESET_SOURCE", "quota reset source is supported only for OpenAI subscription groups")
 			}
@@ -860,18 +864,6 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 				return nil, resolveErr
 			}
 			group.QuotaResetSourceAccountID = &account.ID
-			group.QuotaResetSourceAccountName = account.Name
-			group.QuotaResetSourceResetAt = nil
-			group.QuotaResetSourceValid = true
-			group.QuotaResetConfigVersion++
-		} else if !group.QuotaResetSourceValid && group.SupportsOpenAIQuotaFollowReset() && s.accountRepo != nil {
-			// The source may have been invalid when the group was loaded and
-			// become valid again before this edit. Re-resolve the same ID so an
-			// admin does not need to switch away and back to repair the binding.
-			account, resolveErr := s.resolveOpenAIQuotaResetSource(ctx, *input.QuotaResetSourceAccountID)
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
 			group.QuotaResetSourceAccountName = account.Name
 			group.QuotaResetSourceResetAt = nil
 			group.QuotaResetSourceValid = true

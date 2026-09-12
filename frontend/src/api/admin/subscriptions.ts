@@ -132,7 +132,7 @@ export async function restore(id: number): Promise<UserSubscription> {
 }
 
 /**
- * Reset daily, weekly, and/or monthly usage quota for a subscription
+ * Reset five-hour, daily, weekly, and/or monthly usage quota for a subscription
  * @param id - Subscription ID
  * @param options - Which windows to reset
  * @returns Updated subscription

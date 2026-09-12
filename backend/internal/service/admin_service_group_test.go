@@ -847,6 +847,51 @@ func TestAdminService_UpdateGroup_MonthlyFollowResetPolicyBumpsConfigVersion(t *
 	require.True(t, repo.updated.QuotaResetSourceChanged)
 }
 
+type invalidQuotaResetSourceAccountRepoStub struct {
+	AccountRepository
+}
+
+func (invalidQuotaResetSourceAccountRepoStub) GetByID(context.Context, int64) (*Account, error) {
+	return nil, ErrAccountNotFound
+}
+
+func TestAdminService_UpdateGroup_PreservesUnchangedInvalidQuotaResetSource(t *testing.T) {
+	sourceID := int64(42)
+	existingGroup := &Group{
+		ID:                          1,
+		Name:                        "openai-subscription",
+		Platform:                    PlatformOpenAI,
+		Status:                      StatusActive,
+		SubscriptionType:            SubscriptionTypeSubscription,
+		RateMultiplier:              1,
+		QuotaResetSourceAccountID:   &sourceID,
+		QuotaResetSourceAccountName: "deleted-source@example.com",
+		QuotaResetConfigVersion:     4,
+		QuotaResetSourceValid:       false,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{
+		groupRepo:   repo,
+		accountRepo: invalidQuotaResetSourceAccountRepoStub{},
+	}
+	description := "keep editing"
+
+	updated, err := svc.UpdateGroup(context.Background(), existingGroup.ID, &UpdateGroupInput{
+		Description:                  &description,
+		QuotaResetSourceAccountIDSet: true,
+		QuotaResetSourceAccountID:    &sourceID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, description, updated.Description)
+	require.Equal(t, sourceID, *updated.QuotaResetSourceAccountID)
+	require.Equal(t, "deleted-source@example.com", updated.QuotaResetSourceAccountName)
+	require.False(t, updated.QuotaResetSourceValid)
+	require.Equal(t, int64(4), updated.QuotaResetConfigVersion)
+	require.Same(t, updated, repo.updated)
+}
+
 func TestAdminService_UpdateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {
 	existingGroup := &Group{
 		ID:                        1,
