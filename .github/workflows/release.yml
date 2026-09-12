@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   plan:
-    if: github.repository == 'luohao830/sub2api'
+    if: github.repository == 'haohex/sub2api'
     runs-on: ubuntu-latest
     permissions:
       contents: write
