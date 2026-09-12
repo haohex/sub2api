@@ -53,9 +53,7 @@ jobs:
           fi
 
           tag=$(jq -r '.tag_name // empty' "$release_json")
-          draft=$(jq -r '.draft // true' "$release_json")
-          prerelease=$(jq -r '.prerelease // true' "$release_json")
-          if [ "$draft" != "false" ] || [ "$prerelease" != "false" ]; then
+          if ! jq -e '.draft == false and .prerelease == false' "$release_json" >/dev/null; then
             echo "::error::the selected KlN release is not a published stable release"
             exit 1
           fi

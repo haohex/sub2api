@@ -43,10 +43,23 @@ def state_of(release):
     if not match:
         return None
     state = json.loads(match[1])
-    if (not version_key(release['tag_name']) or not SHA.fullmatch(state['sha'])
+    if not isinstance(state, dict):
+        raise ValueError('Invalid managed release metadata')
+    tag = state.get('tag') or release['tag_name']
+    if not isinstance(tag, str):
+        raise ValueError('Invalid canonical release tag')
+    if release['draft'] and tag.startswith('untagged-'):
+        # Migrate drafts created before the canonical tag was persisted. The
+        # generated title is only a hint; managed() must verify the real tag SHA.
+        name = release.get('name', '')
+        tag = 'v' + name.removeprefix('Sub2API ') if name.startswith('Sub2API ') else ''
+    if (not version_key(tag) or not SHA.fullmatch(state['sha'])
             or not SHA.fullmatch(state['tree']) or not isinstance(state['pr'], int)
             or state['pr'] <= 0 or not isinstance(state['simple'], bool)):
         raise ValueError('Invalid managed release metadata')
+    if release['tag_name'] != tag and not (release['draft'] and release['tag_name'].startswith('untagged-')):
+        raise ValueError('Release tag differs from its frozen identity')
+    state['tag'] = tag
     return state
 
 
@@ -89,6 +102,20 @@ class GitHub:
                 return result
         raise RuntimeError('Pagination limit reached; refusing incomplete release history')
 
+    def upload(self, release_id, path):
+        url = f'https://uploads.github.com/repos/{self.repo}/releases/{release_id}/assets?name={quote(path.name)}'
+        with path.open('rb') as content:
+            request = Request(url, method='POST', data=content, headers={
+                'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': str(path.stat().st_size),
+                'Accept': 'application/vnd.github+json'})
+            try:
+                with urlopen(request, timeout=300) as response:
+                    return json.loads(response.read())
+            except HTTPError as error:
+                raise GitHubError(error.code, 'POST', f'releases/{release_id}/assets') from error
+
 
 class Reconciler:
     def __init__(self, gh):
@@ -96,11 +123,20 @@ class Reconciler:
         self.branch = gh.api('')['default_branch']
         self.image = 'ghcr.io/' + gh.repo.lower()
         self.releases = gh.pages('releases')
+        self.quarantined = set()
 
     def save(self, release, state, **fields):
+        tag = state.get('tag') or release['tag_name']
+        if not version_key(tag):
+            raise ValueError('Cannot save a release without a canonical tag')
+        state['tag'] = tag
         updated = self.gh.api(f'releases/{release["id"]}', 'PATCH',
-                              dict(body=body_for(state), **fields))
+                              dict(body=body_for(state), tag_name=tag, **fields))
+        if updated['tag_name'] != tag and not (updated['draft'] and updated['tag_name'].startswith('untagged-')):
+            raise ValueError('GitHub returned an unexpected published tag')
         release.update(updated)
+        # Use our frozen identity even if GitHub exposes its internal draft alias.
+        release['tag_name'] = tag
 
     def pr(self, number):
         return self.gh.api(f'pulls/{number}')
@@ -123,7 +159,22 @@ class Reconciler:
         return state['sha'] == source or state['tree'] == self.commit(source)['commit']['tree']['sha']
 
     def managed(self):
-        return [(release, state_of(release)) for release in self.releases if state_of(release)]
+        result = []
+        for release in self.releases:
+            try:
+                state = state_of(release)
+                if not state:
+                    continue
+                if release['tag_name'] != state['tag']:
+                    self.verify_tag(dict(release, tag_name=state['tag']), state)
+                    release['tag_name'] = state['tag']
+                result.append((release, state))
+            except (ValueError, KeyError, TypeError, RuntimeError) as error:
+                if not release['draft']:
+                    raise RuntimeError(f'Invalid published release {release["id"]}: {error}') from error
+                self.quarantined.add(release['id'])
+                print(f'::warning::Quarantined release {release["id"]}: {error}')
+        return result
 
     def plan(self):
         since = datetime.fromisoformat(os.environ['AUTOMATION_SINCE'].replace('Z', '+00:00'))
@@ -175,6 +226,7 @@ class Reconciler:
                           if t.startswith(prefix) and t[len(prefix):].isdigit()] or [0]) + 1
             tag = prefix + str(number)
             self.create_tag(tag, state['sha'])
+            state['tag'] = tag
             release = self.gh.api('releases', 'POST', {
                 'tag_name': tag, 'target_commitish': state['sha'], 'draft': True,
                 'prerelease': True, 'make_latest': 'false', 'name': f'Sub2API {tag[1:]}',
@@ -211,7 +263,7 @@ class Reconciler:
 
     def selected(self):
         tag = os.environ['RELEASE_TAG']
-        return next(r for r in self.releases if r['tag_name'] == tag)
+        return next(r for r, _ in self.managed() if r['tag_name'] == tag)
 
     def publish(self):
         release = self.selected()
@@ -261,8 +313,7 @@ class Reconciler:
                 if assets[name].get('digest') != 'sha256:' + digest:
                     raise RuntimeError('Existing asset differs: ' + name)
             else:
-                subprocess.run(['gh', 'release', 'upload', release['tag_name'], str(bundle / name),
-                                '--repo', self.gh.repo], check=True)
+                self.gh.upload(release['id'], bundle / name)
         # A late PR update may leave this as a superseded prerelease; never promote it blindly.
         state['ready'] = True
         self.save(release, state, draft=False, prerelease=True, make_latest='false')
@@ -322,7 +373,7 @@ class Reconciler:
                 self.verify_tag(release, state)
                 if release['prerelease']:
                     stable_peers = [(r, state_of(r)) for r in self.releases
-                                    if not r['draft'] and not r['prerelease']
+                                    if r['id'] not in self.quarantined and not r['draft'] and not r['prerelease']
                                     and version_key(r['tag_name'])
                                     and version_key(r['tag_name'])[:3] == version_key(release['tag_name'])[:3]]
                     if any(s and s.get('merged_at', '') > pr['merged_at'] for _, s in stable_peers):
@@ -354,7 +405,7 @@ class Reconciler:
         if invalid:
             raise RuntimeError('\n'.join(errors))
         stable = [r for r in self.releases if not r['draft'] and not r['prerelease']
-                  and version_key(r['tag_name'])]
+                  and r['id'] not in self.quarantined and version_key(r['tag_name'])]
         if not stable:
             if errors:
                 raise RuntimeError('\n'.join(errors))

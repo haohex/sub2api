@@ -56,6 +56,9 @@ class FakeGitHub:
             return self.assets
         raise AssertionError(path)
 
+    def upload(self, release_id, path):
+        self.assets.append({'name': path.name, 'digest': 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()})
+
     def api(self, path, method='GET', data=None, missing=False, token_env='GH_TOKEN'):
         self.calls.append((path, method, copy.deepcopy(data)))
         if path == '':
@@ -251,7 +254,7 @@ class ReconcileTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    @patch('reconcile.subprocess.run')
+    @patch.object(FakeGitHub, 'upload')
     @patch.object(Reconciler, 'inspect_image', return_value=DIGEST)
     @patch.object(Reconciler, 'inspect_reference')
     @patch.object(Reconciler, 'copy_image')
@@ -305,6 +308,63 @@ class ReconcileTests(unittest.TestCase):
         Reconciler(gh).promote()
         self.assertTrue(candidate['prerelease'])
         self.assertEqual(gh.version, '0.2.4-hao.11')
+
+    def test_legacy_untagged_draft_recovers_only_after_ref_verification(self):
+        item = release()
+        item.update(tag_name='untagged-de15fb563be8018550a1', name='Sub2API 0.2.4-hao.10')
+        gh = FakeGitHub([pr()], [item])
+        result = self.plan(gh)
+        self.assertEqual(result['tag'], 'v0.2.4-hao.10')
+        self.assertEqual(len(gh.releases), 1)
+        self.assertEqual(state_of(item)['tag'], 'v0.2.4-hao.10')
+        self.assertTrue(any(path.startswith('git/ref/tags/v0.2.4-hao.10') for path, _, _ in gh.calls))
+        for path, method, data in gh.calls:
+            if path.startswith('releases/') and method == 'PATCH':
+                self.assertEqual(data['tag_name'], 'v0.2.4-hao.10')
+
+    def test_draft_patch_alias_never_becomes_build_version(self):
+        gh = FakeGitHub([pr()], [release(tag='v0.2.4-hao.10')])
+        api = gh.api
+        def aliased(path, method='GET', data=None, **kwargs):
+            result = api(path, method, data, **kwargs)
+            if method == 'PATCH' and path.startswith('releases/'):
+                return dict(result, tag_name='untagged-random')
+            return result
+        with patch.object(gh, 'api', side_effect=aliased):
+            self.assertEqual(self.plan(gh)['tag'], 'v0.2.4-hao.10')
+
+    def test_bad_draft_does_not_block_another_pr(self):
+        item = release()
+        item['tag_name'] = 'untagged-unknown'
+        gh = FakeGitHub([pr(6)], [item])
+        result = self.plan(gh)
+        self.assertEqual(result['work'], 'true')
+        self.assertEqual(state_of(gh.releases[-1])['pr'], 6)
+
+    def test_invalid_published_metadata_still_fails_closed(self):
+        item = release(ready=True, stable=True, tag='v0.2.4-hao.99')
+        reconciler = Reconciler(FakeGitHub([], [item]))
+        with self.assertRaisesRegex(RuntimeError, 'Invalid published release'):
+            reconciler.managed()
+
+    def test_untagged_draft_with_wrong_ref_is_quarantined(self):
+        item = release()
+        item.update(tag_name='untagged-wrong', name='Sub2API 0.2.4-hao.10')
+        gh = FakeGitHub([], [item])
+        gh.tag_sha = OTHER
+        reconciler = Reconciler(gh)
+        self.assertEqual(reconciler.managed(), [])
+        self.assertIn(item['id'], reconciler.quarantined)
+
+    @patch('reconcile.urlopen')
+    def test_asset_upload_uses_release_id_not_draft_alias(self, urlopen):
+        path = Path(self.temp.name) / 'checksums.txt'
+        path.write_text('checksum')
+        urlopen.return_value.__enter__.return_value.read.return_value = b'{"id":1}'
+        with patch.dict(os.environ, GITHUB_REPOSITORY='owner/repo', GH_TOKEN='test-token'):
+            GitHub().upload(387550494, path)
+        self.assertEqual(urlopen.call_args.args[0].full_url,
+                         'https://uploads.github.com/repos/owner/repo/releases/387550494/assets?name=checksums.txt')
 
 
 if __name__ == '__main__':
