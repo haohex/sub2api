@@ -1,5 +1,11 @@
 # 开发日志
 
+## 2026-09-12：修复上线后的上游识别与草稿恢复
+
+- 实际阻塞：KlN 同步用 jq 的 `// true` 把布尔 false 替换为 true，正式 Release 被误拒绝；首次 Release 构建使用了草稿 API 返回的 `untagged-*`，上传和后续扫描均失败。
+- 修复：显式判断 draft/prerelease 均为 false；持久化 canonical tag，PATCH 总是携带 tag_name，构建不使用草稿别名；附件按 Release ID 上传。旧草稿只在标题候选版本与实际 tag SHA 匹配后恢复；不可恢复的草稿隔离告警，已发布记录异常仍拒绝推进正式渠道。
+- 验证：31 项回归测试及 actionlint 通过，覆盖实际 untagged 草稿形状、PATCH 别名响应、旧草稿错误 SHA、附件上传 ID 和上游布尔判定。
+
 ## 2026-09-12：PR 预发布与合并后发布自动化
 
 - 背景：PR #5 未合并即由 tag/手动触发正式 Release；重复发布被取消后，PR 上出现两个取消状态。
