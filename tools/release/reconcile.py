@@ -22,6 +22,12 @@ SHA = re.compile(r'^[a-f0-9]{40}$')
 MARKER = re.compile(r'<!-- sub2api-release-v1\n(.*?)\n-->', re.S)
 
 
+class GitHubError(RuntimeError):
+    def __init__(self, status, method, path):
+        self.status = status
+        super().__init__(f'GitHub {method} {path}: HTTP {status}')
+
+
 def version_key(tag):
     match = TAG.fullmatch(tag)
     return tuple(map(int, match.groups())) if match else None
@@ -57,10 +63,10 @@ class GitHub:
         self.repo = os.environ['GITHUB_REPOSITORY']
         self.root = f'https://api.github.com/repos/{self.repo}'
 
-    def api(self, path, method='GET', data=None, missing=False):
+    def api(self, path, method='GET', data=None, missing=False, token_env='GH_TOKEN'):
         request = Request(self.root + ('/' + path if path else ''), method=method,
                           data=None if data is None else json.dumps(data).encode(), headers={
-                              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                              'Authorization': 'Bearer ' + os.environ[token_env],
                               'Accept': 'application/vnd.github+json',
                               'Content-Type': 'application/json',
                               'X-GitHub-Api-Version': '2022-11-28'})
@@ -71,7 +77,7 @@ class GitHub:
         except HTTPError as error:
             if missing and error.code == 404:
                 return None
-            raise RuntimeError(f'GitHub {method} {path}: HTTP {error.code}') from error
+            raise GitHubError(error.code, method, path) from error
 
     def pages(self, path, field=None):
         result = []
@@ -168,6 +174,7 @@ class Reconciler:
             number = max([int(t[len(prefix):]) for t in tags
                           if t.startswith(prefix) and t[len(prefix):].isdigit()] or [0]) + 1
             tag = prefix + str(number)
+            self.create_tag(tag, state['sha'])
             release = self.gh.api('releases', 'POST', {
                 'tag_name': tag, 'target_commitish': state['sha'], 'draft': True,
                 'prerelease': True, 'make_latest': 'false', 'name': f'Sub2API {tag[1:]}',
@@ -177,6 +184,24 @@ class Reconciler:
         self.output(work='true', build=str(not state.get('bundle_run')).lower(),
                     tag=release['tag_name'], sha=state['sha'],
                     simple=str(state['simple']).lower(), bundle_run=str(state.get('bundle_run', '')))
+
+    def create_tag(self, tag, sha):
+        payload = {'ref': 'refs/tags/' + tag, 'sha': sha}
+        try:
+            # Suppress tag-push workflows from OLD candidate commits. Creating a
+            # release with a PAT before this ref exists could wake the legacy publisher.
+            self.gh.api('git/refs', 'POST', payload, token_env='TAG_TOKEN')
+        except GitHubError as error:
+            if error.status != 403:
+                raise
+            trusted = os.environ['TRUSTED_SHA']
+            def workflows(commit):
+                entries = self.gh.api(f'contents/.github?ref={commit}')
+                return next(item['sha'] for item in entries if item['name'] == 'workflows')
+            if workflows(sha) != workflows(trusted):
+                raise RuntimeError('Native tag token denied; candidate workflows differ from trusted main. '
+                                   'Update the PR from main before retrying; do not use a PAT to trigger old workflows.')
+            self.gh.api('git/refs', 'POST', payload)
 
     @staticmethod
     def output(**values):

@@ -7,6 +7,7 @@
 
 1. 扫描目标为 main 的同仓库非草稿 PR，或自动化启用后已经合并的 PR。外部 Fork 仅在合并后纳入。
 2. 为实际源码提交分配 `v<基础版本>-hao.<序号>`。基础版本来自该提交的 VERSION，序号同时检查远程 tag 和草稿 Release，不能复用已占用版本。
+   产品 tag 优先由原生 GITHUB_TOKEN 创建以抑制旧提交的 tag-push workflow；创建成功后才使用发布凭据建立草稿。原生令牌被拒绝时，仅在候选与受信任 main 的整个 workflows tree 一致时回退到发布凭据，避免唤起旧的正式发布路径。若不同，明确失败并要求先同步 main，不能绕过。
 3. 草稿 Release 保留 PR、SHA、完整 tree、构建模式及重试状态。复用 CI 和 Security Scan，在确定的源码 SHA 上执行 shell、test、frontend、golangci-lint、backend-security、frontend-security；任何失败均不能发布。
 4. 构建前端、五种平台安装包和 linux/amd64、linux/arm64 OCI 镜像；`SIMPLE_RELEASE=true` 时只构建 amd64 镜像。写入的 VERSION 仅存在于构建工作区。
 5. 上传 Actions 构建 bundle（90 天），在发布副作用前冻结 run ID 和每个文件的 SHA-256。后续重试下载同一 bundle，不能以新构建覆盖旧版本。过期且未完成的 bundle 标记废弃，自动分配新版本。

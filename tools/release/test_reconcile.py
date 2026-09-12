@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from reconcile import GitHub, Reconciler, body_for, state_of, version_key
+from reconcile import GitHub, GitHubError, Reconciler, body_for, state_of, version_key
 
 HEAD, MERGE, TREE, OTHER = 'a' * 40, 'b' * 40, 'c' * 40, 'd' * 40
 DIGEST = 'sha256:' + 'e' * 64
@@ -56,7 +56,7 @@ class FakeGitHub:
             return self.assets
         raise AssertionError(path)
 
-    def api(self, path, method='GET', data=None, missing=False):
+    def api(self, path, method='GET', data=None, missing=False, token_env='GH_TOKEN'):
         self.calls.append((path, method, copy.deepcopy(data)))
         if path == '':
             return {'default_branch': 'main'}
@@ -66,6 +66,10 @@ class FakeGitHub:
             return {'commit': {'tree': {'sha': self.tree}}}
         if path.startswith('git/ref/'):
             return {'object': {'type': 'commit', 'sha': self.tag_sha}}
+        if path == 'git/refs' and method == 'POST':
+            self.tags.append({'name': data['ref'].removeprefix('refs/tags/')})
+            self.tag_token = token_env
+            return {'object': {'type': 'commit', 'sha': data['sha']}}
         if path.startswith('contents/'):
             if method == 'PUT':
                 self.version = base64.b64decode(data['content']).decode().strip()
@@ -116,6 +120,19 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(result['build'], 'true')
         self.assertTrue(gh.releases[-1]['draft'])
         self.assertTrue(gh.releases[-1]['prerelease'])
+        self.assertEqual(gh.tag_token, 'TAG_TOKEN')
+
+    def test_native_tag_denial_never_falls_back_to_old_candidate_workflows(self):
+        gh = FakeGitHub()
+        reconciler = Reconciler(gh)
+        def api(path, method='GET', data=None, **kwargs):
+            if path == 'git/refs':
+                self.assertEqual(kwargs.get('token_env'), 'TAG_TOKEN')
+                raise GitHubError(403, method, path)
+            return [{'name': 'workflows', 'sha': TREE if HEAD in path else OTHER}]
+        with patch.object(gh, 'api', side_effect=api), patch.dict(os.environ, TRUSTED_SHA=MERGE):
+            with self.assertRaisesRegex(RuntimeError, 'candidate workflows differ'):
+                reconciler.create_tag('v0.2.4-hao.10', HEAD)
 
     def test_squash_same_tree_reuses_candidate(self):
         gh = FakeGitHub([pr(merged=True)], [release(ready=True)])

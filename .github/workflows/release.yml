@@ -52,6 +52,8 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG_TOKEN: ${{ github.token }}
+          TRUSTED_SHA: ${{ steps.trust.outputs.sha }}
           SIMPLE_RELEASE: ${{ vars.SIMPLE_RELEASE || 'false' }}
         run: python3 tools/release/reconcile.py plan
 
