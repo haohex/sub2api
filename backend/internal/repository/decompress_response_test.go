@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
@@ -188,3 +189,80 @@ func compressDeflate(t *testing.T, payload []byte) []byte {
 	require.NoError(t, zw.Close())
 	return buf.Bytes()
 }
+
+// 上游声称 gzip 但体不是 gzip 时，网关不能把体吃掉一截再原样标着 Content-Encoding: gzip
+// 发给下游——客户端拿到的是"声称 gzip 的残缺流"，比原样透传更糟。
+// 失败路径必须零消费：体逐字节保持原样，头也保持原样（那才是上游真正发来的东西）。
+func TestDecompressResponseBodyInvalidGzipPreservesBodyBytes(t *testing.T) {
+	previousLogger := slog.Default()
+	var logOutput bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	payload := []byte(`{"error":{"message":"upstream said gzip but sent plain json"}}`)
+	resp := newEncodedResponse("gzip", payload)
+
+	require.NotPanics(t, func() { decompressResponseBody(resp) })
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, payload, body, "解压失败时不能吞掉任何字节")
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.Equal(t, int64(len(payload)), resp.ContentLength)
+	require.Contains(t, logOutput.String(), "msg=gzip_decompress_failed")
+	require.NoError(t, resp.Body.Close())
+}
+
+// 魔数对但头后半段被截断时字节已被 gzip.NewReader 吃掉、无法还原。此时必须保留
+// Content-Encoding：剩下的是裸 deflate 字节，删掉头等于把二进制重新标成明文，下游会把它
+// 当文本解析、写日志、回给客户端；带着头至少是自解释的失败。
+func TestDecompressResponseBodyTruncatedGzipKeepsEncodingHeader(t *testing.T) {
+	resp := newEncodedResponse("gzip", []byte{0x1f, 0x8b, 0x08})
+
+	require.NotPanics(t, func() { decompressResponseBody(resp) })
+
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.NoError(t, resp.Body.Close())
+}
+
+// 带 Content-Encoding 的空体（204/304、空错误体）是完全正常的场景，不该刷 WARN。
+func TestDecompressResponseBodyEmptyGzipDoesNotWarn(t *testing.T) {
+	previousLogger := slog.Default()
+	var logOutput bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	resp := newEncodedResponse("gzip", nil)
+
+	require.NotPanics(t, func() { decompressResponseBody(resp) })
+
+	require.NotContains(t, logOutput.String(), "gzip_decompress_failed")
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.NoError(t, resp.Body.Close())
+}
+
+// 流式回归：探测头部时读取的字节数不能超过旧实现的 10 字节。gzip 的 SSE 流首个 flush
+// 可能只够一个 gzip 头就停下等下一个事件，多探一个字节就会把流式拖成卡住。
+func TestDecompressResponseBodyGzipDoesNotOverReadOnStreamingBody(t *testing.T) {
+	full := compressGzip(t, []byte(`{"ok":true}`))
+	blocked := make(chan struct{})
+	t.Cleanup(func() { close(blocked) })
+
+	resp := newEncodedResponse("gzip", nil)
+	resp.Body = &responseTestBody{Reader: io.MultiReader(
+		bytes.NewReader(full[:10]), // 恰好一个 gzip 头
+		readerFunc(func([]byte) (int, error) { <-blocked; return 0, io.EOF }),
+	)}
+
+	done := make(chan struct{})
+	go func() { defer close(done); decompressResponseBody(resp) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("探测头部时读过了头：流式响应会被拖住")
+	}
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }

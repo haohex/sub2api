@@ -723,12 +723,15 @@ export default {
         codexFingerprintModeDesc: '多人共享同一 OAuth 账号时，将各用户的设备/会话标识收敛为账号级恒定值，减少上游可见的设备数和会话数。默认关闭（原样透传客户端标识），需要时再显式开启；部分账号开启收敛后出现过额度缩水，请按自己的实测结果选择。',
         codexFingerprintConvergence: '实验性指纹收敛（klno）',
         codexFingerprintConvergenceDesc: '让这把 API key 的出站身份在 HTTP / WS 上与真 Codex 客户端形态一致：补齐 session-id / thread-id 头，x-client-request-id 等于 thread-id，去掉 session_id / conversation_id 别名，root_turn_id 等与同类字段同源派生，保持 UUIDv7。关闭时与上游行为完全一致；开启那一刻该账号的会话标识会一次性轮换。',
-        codexRequestTimezone: '请求时区替换（klno）',
-        codexRequestTimezoneDesc: '把出站请求体里 <environment_context> 的 <timezone> 与 <current_date> 改写成该账号代理出口 IP 所在时区，避免「美区账号 + 亚洲时区客户端」两套地理信号同时出站。时区经代理反查（ip-api，缓存 6 小时，不在请求路径上等待），账号未绑定代理时不生效；关闭时与上游行为完全一致。',
         codexFingerprintOff: '关闭（透传，默认）',
         codexFingerprintDevice: '仅设备',
         codexFingerprintSession: '设备+会话',
         codexFingerprintFull: '完全收敛',
+        codexUserAgent: 'Codex 出站 User-Agent',
+        codexUserAgentDesc: '该账号出站时自报的客户端标识，HTTP、WS 握手与额度查询共用。留空使用全局设置。'
+          + '要与该账号使用者的真实系统一致：UA 报 Windows、请求体里却是 Linux 路径和 shell，两者互相矛盾。'
+          + '版本号会被网关统一改写为生效版本，填什么都一样。',
+        codexUserAgentPlaceholder: '留空使用全局设置',
         codexImageTool: 'Codex 图片桥接策略',
         codexImageToolDesc:
           '统一控制 Codex /responses 文本请求的 hosted image_generation 桥接和客户端图片工具声明。hosted 工具自动注入仅适用于非 Responses Lite 请求；账号级策略优先于渠道和全局配置，不影响独立图片生成接口。',

@@ -7,19 +7,6 @@
 前提：预演库的目标账号必须是 device + 实验收敛【双开】——线协议投影
 (applyCodexDeviceWireProfile) 只在双开时生效，单开跑出来的结果不代表 pro1。
 
-时区断言（可选）：目标账号开了账号级「请求时区替换」(extra.codex_request_timezone) 后，
-用 SUB2API_REHEARSAL_TIMEZONE 声明该账号代理出口时区（如 America/Los_Angeles）。
-探针会故意发一个错的时区（SENTINEL_TZ），断言出站被改写成期望值、且日期与目标时区当天相符；
-不设这个环境变量时，时区断言整体跳过（发送侧照常带探针时区，不做判定）。
-
-跑法：
-  python3 fp_probe.py --selftest      # 离线自检检查器与反例，不发任何请求
-  SUB2API_REHEARSAL_API_KEY=... SUB2API_REHEARSAL_TIMEZONE=America/Los_Angeles python3 fp_probe.py
-
-正式跑之前会先发一条"热身"请求：代理出口时区是按需异步探测的（结果缓存 6 小时，
-请求路径上不等探测），不热身的话第一个用例必然落在冷缓存上、拿到未改写的时区。
-热身只在正式计数之前发生，不参与捕获比对。
-
 设计约束（上一版踩过的坑，逐条钉死）：
   1. 每个用例必须有对应捕获，数量和路径都要对上；没发出去 = 失败，不是跳过。
   2. curl 的退出码要检查，非 0 直接失败。
@@ -33,6 +20,7 @@
 预演凭据从 SUB2API_REHEARSAL_API_KEY 读取，不写入仓库。
 """
 import base64
+import datetime
 import json
 import os
 import re
@@ -44,10 +32,10 @@ import time
 
 GW = "http://127.0.0.1:18080"
 KEY = os.environ.get("SUB2API_REHEARSAL_API_KEY", "")
-# klno 请求时区替换的期望值：账号代理出口 IP 所在时区。留空 = 跳过时区断言。
-EXPECTED_TZ = os.environ.get("SUB2API_REHEARSAL_TIMEZONE", "").strip()
-# 探针故意发的"错误"时区（UTC+14，任何美区/欧区账号都不可能匹配）。被改写的实现必然让它消失。
-SENTINEL_TZ = "Pacific/Kiritimati"
+# --expect-timezone=<IANA|none>：必须显式声明。none 表示"该账号不该改写"，出站体要与探针
+# 发出的逐字相同；给 IANA 名则按该时区断言。刻意不设缺省：额度刷新会在后台把自动解析出的
+# 出口时区写进账号 extra（24 小时一次，无需人工），缺省成 none 的话配置没变的探针会某天突然变红。
+EXPECT_TZ = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--expect-timezone=")), "")
 CAP = "/opt/s2a-rehearsal/echo/capture.jsonl"
 UA = "codex-tui/0.153.4 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; 0.153.4)"
 INSTALL = "7f582abd-05d2-4a59-b4e5-ec1b733b4edc"
@@ -60,6 +48,32 @@ TOOLS = ["shell", "apply_patch"]
 # format!("{thread_id}:{window_number}")）。探针故意发一个非初值：写死成 :0/:1 的
 # 实现只有在探针恰好发同一个数时才会"通过"。
 WINDOW_NUMBER = 3
+# 探针发的 inference-call-id 原值；网关每次出站新铸 v4（原值直通即跨账号关联；真客户端
+# 每次 attempt 新铸，rollout-trace/src/inference.rs:347-349）。
+INFER_ID = "bbd9bf7b-cb3d-48e7-bdcb-1c4bba7ee0a1"
+# 顶层字段序，抄自 codex-rs 16ff14c codex-api/src/common.rs（Responses :282-307 /
+# CompactionInput :48-65 / ResponseCreateWsRequest :334-363 + serde tag 让 type 最前）。
+RESPONSES_ORDER = ["model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls",
+                   "reasoning", "store", "stream", "stream_options", "include", "service_tier",
+                   "prompt_cache_key", "text", "client_metadata", "access_programs"]
+COMPACT_ORDER = ["model", "input", "instructions", "tools", "parallel_tool_calls", "reasoning",
+                 "service_tier", "prompt_cache_key", "text", "access_programs"]
+WS_CREATE_ORDER = ["type", "model", "instructions", "previous_response_id", "input", "tools",
+                   "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream",
+                   "stream_options", "include", "service_tier", "prompt_cache_key", "text",
+                   "generate", "client_metadata", "access_programs"]
+# WS turn-state：探针入站握手带 WS_TURN_STATE、首帧不带（网关按真客户端的位置补进帧内，
+# core/src/client.rs:1792-1793），第二帧自带 WS_OWN_TURN_STATE（不得被覆盖）。
+WS_TURN_STATE = "ts-handshake"
+WS_OWN_TURN_STATE = "ts-own"
+# 真客户端发送前给每个 response.create 帧盖 x-codex-ws-stream-request-start-ms（unix 毫秒的
+# 十进制字符串，core/src/client.rs:2103-2112）。语义是无条件覆盖（HashMap::insert）且在重试
+# 循环内（:1746 loop），每次 attempt 重盖，注释写明"发送到 socket 之前才盖"（:2099-2101）。
+# 探针首帧不带（网关必须盖），第二帧自带 WS_OWN_STREAM_START（网关必须在发送边界重盖成
+# 自己的时刻，出站不得仍是这个值）。
+WS_OWN_STREAM_START = "1700000000123"
+# 受控回放里代表"网关重盖后的值"：与 WS_OWN_STREAM_START 不同的合法十进制毫秒。
+WS_RESTAMPED = "1700000000999"
 
 # ── 端点契约 ───────────────────────────────────────────────────────────────
 # device_carrier 取值：
@@ -72,12 +86,22 @@ CONTRACTS = {
         "required_headers": ["originator", "user-agent", "version", "session-id", "thread-id",
                              "x-client-request-id", "x-codex-window-id", "x-codex-turn-metadata"],
         "forbidden_headers": ["x-codex-installation-id", "session_id", "conversation_id"],
+        # 真客户端默认 enable_request_compression（features/src/lib.rs:1221-1224 Stable+default_enabled）：
+        # ChatGPT 登录态的每条 /responses 请求体 zstd 压缩并带 content-encoding: zstd
+        # （core/src/client.rs:1534-1541、http-client/src/request.rs:192-222）；compact / 搜索 / WS 不压。
+        # echo server 记录的是解压后的体，这里只看头。
+        "content_encoding": "zstd",
+        # rollout-trace 只在 HTTP /responses 的 attempt 上生成（core/src/client.rs:1646）；
+        # 网关按账号派生，出站值必须存在且 != 探针原值。
+        "namespaced_headers": {"x-codex-inference-call-id": INFER_ID},
         "required_body": ["prompt_cache_key", "client_metadata.session_id",
                           "client_metadata.thread_id", "client_metadata.x-codex-installation-id",
                           "client_metadata.x-codex-window-id",
                           "client_metadata.x-codex-turn-metadata"],
+        "body_order": RESPONSES_ORDER,
         "device_carrier": ["body_install", "meta_install", "body_meta_install"],
         "relations": [
+            ("h:version", "expr:ua_version"),
             ("h:session-id", "h:thread-id"),
             ("h:thread-id", "h:x-client-request-id"),
             ("h:x-codex-window-id", "expr:thread_window"),
@@ -99,13 +123,19 @@ CONTRACTS = {
         ],
     },
     # 图片是自建 Responses body：只带设备身份，没有会话级 client_metadata，也没有缓存键。
+    # 各契约里 x-codex-inference-call-id 的 forbidden 与 ("h:version","expr:ua_version") 关系在
+    # 当前实现下恒真（转发白名单不含该头；version 与 UA 由同一个规范身份重建），只是回归护栏。
     "images": {
         "required_headers": ["originator", "user-agent", "version", "session-id", "thread-id",
                              "x-client-request-id", "x-codex-window-id", "x-codex-turn-metadata"],
-        "forbidden_headers": ["x-codex-installation-id", "session_id", "conversation_id"],
+        "forbidden_headers": ["x-codex-installation-id", "session_id", "conversation_id",
+                              "x-codex-inference-call-id"],
+        "content_encoding": "zstd",
         "required_body": ["client_metadata.x-codex-installation-id"],
+        "body_order": RESPONSES_ORDER,
         "device_carrier": ["body_install", "meta_install"],
         "relations": [
+            ("h:version", "expr:ua_version"),
             ("h:session-id", "h:thread-id"),
             ("h:thread-id", "h:x-client-request-id"),
             ("h:x-codex-window-id", "expr:thread_window"),
@@ -118,27 +148,43 @@ CONTRACTS = {
     "compact": {
         "required_headers": ["originator", "user-agent", "version", "session-id", "thread-id",
                              "x-codex-window-id", "x-codex-turn-metadata", "x-codex-installation-id"],
-        "forbidden_headers": ["x-client-request-id", "session_id", "conversation_id"],
+        "forbidden_headers": ["x-client-request-id", "session_id", "conversation_id",
+                              "x-codex-inference-call-id"],
+        "content_encoding": None,
         "required_body": ["prompt_cache_key"],
         "forbidden_body": ["client_metadata"],
+        "body_order": COMPACT_ORDER,
         "device_carrier": ["header_install", "meta_install"],
         "relations": [
+            ("h:version", "expr:ua_version"),
             ("h:session-id", "h:thread-id"),
             ("h:x-codex-window-id", "expr:thread_window"),
             ("b:prompt_cache_key", "h:session-id"),
             ("m:session_id", "h:session-id"),
         ],
     },
-    # 真实客户端在该端点只发 turn-metadata + originator（ext/web-search/src/tool.rs 的
-    # search_request_headers），不发任何会话头；body.id 就是 session_id。
+    # 搜索使用 MCP metadata 投影（16ff14c: core/src/turn_metadata.rs:234-280）：
+    # 无 Responses 的设备/窗口/请求种类字段，body.id 与 session_id 同源；
+    # metadata.codex_version / model 与出站 version 头 / body.model 同源。
     "search": {
+        # 独立搜索端点不压：真客户端只对 /responses 压（core/src/client.rs:1534-1541）。
+        "content_encoding": None,
         "required_headers": ["originator", "user-agent", "version", "x-codex-turn-metadata"],
         "forbidden_headers": ["session-id", "thread-id", "x-client-request-id",
                               "x-codex-window-id", "x-codex-installation-id",
-                              "session_id", "conversation_id", "openai-beta"],
+                              "session_id", "conversation_id", "openai-beta",
+                              "x-codex-inference-call-id"],
         "required_body": ["id"],
-        "device_carrier": ["meta_install"],
-        "relations": [("b:id", "m:session_id")],
+        "required_metadata": ["session_id", "thread_id", "turn_id", "codex_version", "model"],
+        "forbidden_metadata": ["installation_id", "window_id", "window_number", "context_window_id",
+                               "agent_name", "parent_turn_id", "root_turn_id", "request_kind", "compaction",
+                               "history_ingest_requested", "forked_from_ordinal_exclusive", "tool_namespaces_info"],
+        "check_window_number": False,
+        "device_carrier": [],
+        "relations": [("b:id", "m:session_id"),
+                      ("h:version", "expr:ua_version"),
+                      ("m:codex_version", "h:version"),
+                      ("m:model", "b:model")],
     },
 }
 
@@ -161,11 +207,21 @@ def turn_meta(s, window_number=WINDOW_NUMBER):
                       separators=(",", ":"))
 
 
+def turn_meta_mcp(s):
+    """搜索工具的 MCP 投影形态（core/src/turn_metadata.rs:390-444）：codex_version / model
+    故意填错值，证明网关会把它们对齐到出站 version 头与 body.model。"""
+    return json.dumps({"session_id": s, "thread_id": s,
+                       "turn_id": "01a07c73-e3a0-7ae1-baf0-ce1c532f019c",
+                       "codex_version": "0.0.1", "model": "wrong-model", "reasoning_effort": "medium"},
+                      separators=(",", ":"))
+
+
 def codex_headers(s, relayed=False):
     """relayed=True 模拟 31.108 中继：连字符会话头被剥掉，只剩体内 client_metadata。"""
     h = {"originator": "codex-tui", "user-agent": UA, "version": "0.153.4",
          "x-codex-installation-id": INSTALL, "x-codex-window-id": "%s:%d" % (s, WINDOW_NUMBER),
-         "x-codex-turn-metadata": turn_meta(s), "openai-beta": FORBIDDEN_BETA}
+         "x-codex-turn-metadata": turn_meta(s), "openai-beta": FORBIDDEN_BETA,
+         "x-codex-inference-call-id": INFER_ID}
     if not relayed:
         h.update({"session-id": s, "thread-id": s, "x-client-request-id": s})
     return h
@@ -177,35 +233,33 @@ def meta(s, window_number=WINDOW_NUMBER):
             "x-codex-turn-metadata": turn_meta(s, window_number)}
 
 
-def env_context(timezone=SENTINEL_TZ, date="2026-06-20"):
-    """真实客户端在会话开始（以及时区/日期变化）时插入的环境块：
-    codex-rs core/src/session/world_state.rs + core/src/context/world_state/environment.rs。"""
-    return ("<environment_context>\n  <current_date>%s</current_date>\n"
-            "  <timezone>%s</timezone>\n  <network enabled=\"true\" />\n</environment_context>"
-            % (date, timezone))
-
-
-def resp_body(s, stream=True):
+def resp_body(s, stream=True, env_context=False):
+    items = [{"type": "message", "role": "user", "content": "hi"}]
+    if env_context:
+        items.insert(0, {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": ENV_CONTEXT}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["environments.environment_context"],
+                "create_time": PROBE_ENV_CREATED_AT,
+            },
+        })
     return {"model": "gpt-5.4", "stream": stream, "prompt_cache_key": s,
             "client_metadata": meta(s),
-            "input": [
-                {"type": "message", "role": "user",
-                 "content": [{"type": "input_text", "text": env_context()}]},
-                {"type": "message", "role": "user", "content": "hi"},
-            ]}
+            "input": items}
 
 
 def build_cases():
     s1, s2, s3, s4, s5, s6 = (sid(i) for i in range(1, 7))
     return [
         {"label": "A 直连 SSE", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
-         "body": resp_body(s1), "headers": codex_headers(s1)},
+         "upstream": "/backend-api/codex/responses",
+         "body": resp_body(s1, env_context=True), "headers": codex_headers(s1)},
         {"label": "B 中继剥头 SSE", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
+         "upstream": "/backend-api/codex/responses",
          "body": resp_body(s2), "headers": codex_headers(s2, relayed=True)},
         {"label": "C 非流式", "path": "/v1/responses", "contract": "responses",
-         "upstream": "/backend-api/codex/responses", "expect_env_timezone": True,
+         "upstream": "/backend-api/codex/responses",
          "body": resp_body(s3, stream=False), "headers": codex_headers(s3)},
         {"label": "D compact", "path": "/v1/responses/compact", "contract": "compact",
          "upstream": "/backend-api/codex/responses/compact",
@@ -216,16 +270,10 @@ def build_cases():
          "upstream": "/backend-api/codex/responses",
          "body": {"model": "gpt-image-2", "prompt": "a cat", "n": 1, "size": "1024x1024"},
          "headers": codex_headers(s5)},
-        # 客户端声明的搜索位置：时区替换开启时，出站两份副本（standalone 的
-        # settings.user_location、PAT 桥接的 tools[].user_location 与 prompt 里的 settings）
-        # 都必须变成账号出口时区，而 city/country 保持客户端原值。
         {"label": "F alpha/search", "path": "/v1/alpha/search", "contract": "search",
-         "upstream": "/backend-api/codex/alpha/search", "expect_search_timezone": True,
-         "body": {"id": s6, "model": "gpt-5.4", "query": "x",
-                  "settings": {"search_context_size": "medium",
-                               "user_location": {"type": "approximate", "city": "Shanghai",
-                                                 "country": "CN", "timezone": SENTINEL_TZ}}},
-         "headers": codex_headers(s6)},
+         "upstream": "/backend-api/codex/alpha/search",
+         "body": {"id": s6, "model": "gpt-5.4", "query": "x"},
+         "headers": dict(codex_headers(s6), **{"x-codex-turn-metadata": turn_meta_mcp(s6)})},
     ]
 
 
@@ -281,6 +329,10 @@ def resolve(token, ctx):
         return jget(ctx["body_meta"] or {}, name)
     if kind == "expr" and name == "window_number":
         return ctx.get("window_number", WINDOW_NUMBER)
+    if kind == "expr" and name == "ua_version":
+        # version 头是 provider 头（model-provider-info/src/lib.rs:397），值与 UA 版本段同源。
+        ua = hdr(ctx["row"], "user-agent") or ""
+        return ua.split("/", 1)[1].split(" ", 1)[0] if "/" in ua else None
     if kind == "expr" and name == "thread_window":
         # 契约是"<出站 thread>:<入站序号>"，不是某个固定数字。上一版把 ":1" 写死，
         # 只在探针恰好发 1 时成立，反而会保护"序号被改写"的实现。
@@ -289,107 +341,142 @@ def resolve(token, ctx):
     raise AssertionError("unknown token " + token)
 
 
-# ── 时区替换检查（klno codex_request_timezone / codexRequestTimezone）─────────
-
-ENV_CONTEXT_TZ_RE = re.compile(r"<timezone>([^<]*)</timezone>")
-ENV_CONTEXT_DATE_RE = re.compile(r"<current_date>([^<]*)</current_date>")
-
-
-def input_texts(body):
-    """按 Responses 的两种文本载体取出 input 里的文本：input 字符串、message 的文本项。"""
-    out = []
-    if not isinstance(body, dict):
-        return out
-    raw_input = body.get("input")
-    if isinstance(raw_input, str):
-        out.append(raw_input)
-        return out
-    if not isinstance(raw_input, list):
-        return out
-    for item in raw_input:
-        if not isinstance(item, dict):
-            continue
-        content = item.get("content")
-        if isinstance(content, str):
-            out.append(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    out.append(part["text"])
-    return out
+for _name, _spec in CONTRACTS.items():
+    assert "content_encoding" in _spec, \
+        "契约 %s 必须显式声明 content_encoding（\"zstd\" 或 None）" % _name
 
 
-def env_context_values(body):
-    """取出出站环境块里的 (timezone, current_date)；没有环境块返回 (None, None)。"""
-    for text in input_texts(body):
-        if "<environment_context>" not in text:
-            continue
-        tz = ENV_CONTEXT_TZ_RE.search(text)
-        date = ENV_CONTEXT_DATE_RE.search(text)
-        return (tz.group(1) if tz else None, date.group(1) if date else None)
-    return (None, None)
+# ── 账号面侧信道与 environment_context 时区 ─────────────────────────────────
+# 真客户端除推理外还打一条只读 GET：settings/user（git 归属策略按线程首见拉一次，
+# ext/git-attribution/src/policy.rs:52-102）。网关按同样节奏补发，它不是推理请求，
+# 不参与 check_rows 的位置配对。config/bundle 见下面：个人 plan 的真客户端不发，出现即判红。
+SIDE_CALL_PREFIX = "/backend-api/wham/"
+SIDE_CALL_SETTINGS = "/backend-api/wham/settings/user"
+# config/bundle 只有 business/edu/enterprise plan 的真客户端会打
+# （cloud-config/src/service.rs:50-58 + protocol/src/account.rs:67-80），个人 Plus/Pro 一条都没有；
+# 网关补发它等于凭空多一个特征，所以这里把它当"不该出现的账号面请求"判红。
+# backend-client 的 headers()（backend-client/src/client.rs:245-265）只发这些；
+# originator / version 来自推理面的 OpenAI Provider，backend-client 不走它。
+SIDE_CALL_REQUIRED = ["authorization", "user-agent", "chatgpt-account-id"]
+SIDE_CALL_FORBIDDEN = ["originator", "version", "session-id", "thread-id",
+                       "x-client-request-id", "x-codex-window-id", "x-codex-turn-metadata",
+                       "x-codex-installation-id", "openai-beta", "x-codex-inference-call-id"]
+
+# 固定的历史消息，日期必须按它的 create_time 换算，不能按检查器运行时的今天。
+PROBE_ENV_CREATED_AT = datetime.datetime(2026, 3, 1, 3, 30, tzinfo=datetime.timezone.utc).timestamp()
 
 
-def expected_dates(timezone):
-    """目标时区"今天"的 ISO 日期集合（含前后一天，容忍跨零点与安装时差）。
-    tz 数据不可用时返回空集合 → 跳过日期断言。"""
+def _probe_environment_source():
+    """选一个与目标日历日不同的固定偏移时区，让日期改写断言确实被触发。"""
+    source_tz, offset = "Etc/GMT+12", -12
+    source_date = datetime.datetime.fromtimestamp(
+        PROBE_ENV_CREATED_AT, datetime.timezone(datetime.timedelta(hours=offset))).strftime("%Y-%m-%d")
     try:
-        from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
-        today = datetime.now(ZoneInfo(timezone)).date()
-        return {(today + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
+        if EXPECT_TZ and EXPECT_TZ != "none":
+            target_date = datetime.datetime.fromtimestamp(PROBE_ENV_CREATED_AT, ZoneInfo(EXPECT_TZ)).strftime("%Y-%m-%d")
+            if target_date == source_date:
+                source_tz, offset = "Etc/GMT-14", 14
+                source_date = datetime.datetime.fromtimestamp(
+                    PROBE_ENV_CREATED_AT, datetime.timezone(datetime.timedelta(hours=offset))).strftime("%Y-%m-%d")
     except Exception:
-        return set()
+        pass  # 检查器会明确报告缺少 tz 数据库，不把回落值当作目标时区的证据。
+    return source_tz, source_date
 
 
-def timezone_env_problems(body, sentinel, expected, label):
-    """环境块时区断言。expected 为空 = 未声明期望值，整体跳过（不判改写与否）。"""
-    if not expected:
-        return []
-    out_tz, out_date = env_context_values(body)
-    if out_tz is None:
-        return ["%s 出站环境块里没有 <timezone>（应改写为 %s）" % (label, expected)]
-    if out_tz == sentinel:
-        return ["%s 环境块时区未被改写，仍是探针发的 %s" % (label, sentinel)]
-    if out_tz != expected:
-        return ["%s 环境块时区 %r != 期望 %r" % (label, out_tz, expected)]
-    dates = expected_dates(expected)
-    if dates and out_date not in dates:
-        return ["%s 环境块日期 %r 与目标时区 %s 的当天不符（只改时区没改日期？）"
-                % (label, out_date, expected)]
-    return []
+PROBE_ENV_TZ, PROBE_ENV_DATE = _probe_environment_source()
+ENV_CONTEXT = ("<environment_context>\n  <cwd>/home/probe</cwd>\n  <shell>bash</shell>\n"
+               "  <current_date>%s</current_date>\n  <timezone>%s</timezone>\n"
+               "</environment_context>" % (PROBE_ENV_DATE, PROBE_ENV_TZ))
 
 
-def search_location_problems(body, sentinel, expected, label):
-    """alpha/search 出站 user_location.timezone 断言：只看存在的那一种形态——
-    standalone 是 settings.user_location，PAT 桥接是 tools[].user_location 加 prompt 里的
-    settings 副本。expected 为空 = 跳过。"""
-    if not expected or not isinstance(body, dict):
-        return []
+def check_side_calls(side_rows, inference_rows):
+    """HTTP/WS 的每个最终线程一条 settings/user；返回 problems 列表。"""
     problems = []
-    found = []
-    standalone = jget(body, "settings.user_location.timezone")
-    if isinstance(standalone, str):
-        found.append(("settings.user_location.timezone", standalone))
-    tools = body.get("tools")
-    if isinstance(tools, list):
-        for idx, tool in enumerate(tools):
-            if not isinstance(tool, dict):
+    threads = set()
+    for row in inference_rows:
+        if row.get("kind") == "ws_message":
+            body = row.get("body") or {}
+            if isinstance(body, dict) and body.get("type") == "response.create":
+                cm = body.get("client_metadata") or {}
+                tid = cm.get("thread_id") if isinstance(cm, dict) else None
+                if isinstance(tid, str) and tid:
+                    threads.add(tid)
+            continue
+        if row.get("kind") != "http" or row.get("path") != "/backend-api/codex/responses":
+            continue
+        tid = hdr(row, "thread-id")
+        if tid:
+            threads.add(tid)
+
+    counts = {}
+    for row in side_rows:
+        path = row.get("path")
+        counts[path] = counts.get(path, 0) + 1
+        if row.get("method") != "GET":
+            problems.append("侧信道 %s 必须是只读 GET，实际 %s" % (path, row.get("method")))
+        for name in SIDE_CALL_REQUIRED:
+            if not hdr(row, name):
+                problems.append("侧信道 %s 缺 %s" % (path, name))
+        for name in SIDE_CALL_FORBIDDEN:
+            if hdr(row, name):
+                problems.append("侧信道 %s 不该带推理面的 %s" % (path, name))
+
+    unknown = sorted(set(counts) - {SIDE_CALL_SETTINGS})
+    if unknown:
+        problems.append("出现未声明的账号面请求：%s" % unknown)
+    got_settings = counts.get(SIDE_CALL_SETTINGS, 0)
+    if got_settings != len(threads):
+        problems.append("settings/user 每线程一条，出站线程 %d 个 %s，实际 %d 条"
+                        % (len(threads), sorted(threads), got_settings))
+    return problems
+
+
+def env_tag(text, tag):
+    m = re.search("<%s>([^<]*)</%s>" % (tag, tag), text)
+    return m.group(1) if m else None
+
+
+def probe_date_in(tz, problems):
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.fromtimestamp(PROBE_ENV_CREATED_AT, ZoneInfo(tz)).strftime("%Y-%m-%d")
+    except Exception as exc:
+        problems.append("无法按时区 %s 换算消息创建日期：%s" % (tz, exc))
+        return None
+
+
+def check_environment_timezone(rows, expect_tz):
+    """expect_tz 为 None 表示账号没配时区：environment_context 必须原样透传；
+    配了就必须按该消息的固定 create_time 换算。两侧都是硬断言，不存在跳过。"""
+    problems = []
+    seen = 0
+    for row in rows:
+        # echo server 会把长字段省略（trim_body），environment_context 落在被省略的 input 里，
+        # 所以它在省略前单独摘了一列 env_context；自检里的构造样本仍走 body 文本这条路。
+        env = row.get("env_context")
+        if isinstance(env, dict) and env:
+            got_tz, got_date = env.get("timezone"), env.get("current_date")
+        else:
+            raw = row.get("body")
+            text = json.dumps(raw, ensure_ascii=False) if isinstance(raw, (dict, list)) else str(raw or "")
+            if "<timezone>" not in text and "<current_date>" not in text:
                 continue
-            location = tool.get("user_location")
-            if isinstance(location, dict) and isinstance(location.get("timezone"), str):
-                found.append(("tools[%d].user_location.timezone" % idx, location["timezone"]))
-    if not found:
-        problems.append("%s 出站请求里找不到 user_location.timezone（探针发过，不该消失）" % label)
-    for name, value in found:
-        if value == sentinel:
-            problems.append("%s %s 未被改写，仍是探针发的 %s" % (label, name, sentinel))
-        elif value != expected:
-            problems.append("%s %s 为 %r != 期望 %r" % (label, name, value, expected))
-    # prompt 里那份 settings 副本（仅 PAT 桥接路径有），必须与工具侧同值。
-    for text in input_texts(body):
-        if '"user_location"' in text and sentinel in text:
-            problems.append("%s prompt 里的 settings 副本仍带探针时区 %s" % (label, sentinel))
+            got_tz, got_date = env_tag(text, "timezone"), env_tag(text, "current_date")
+        seen += 1
+        if expect_tz is None:
+            if got_tz != PROBE_ENV_TZ or got_date != PROBE_ENV_DATE:
+                problems.append("未配置账号级时区时 environment_context 必须原样透传，实际 %s / %s"
+                                % (got_tz, got_date))
+            continue
+        if got_tz != expect_tz:
+            problems.append("environment_context 时区应改写为 %s，实际 %s" % (expect_tz, got_tz))
+        want_date = probe_date_in(expect_tz, problems)
+        if want_date and got_date != want_date:
+            problems.append("environment_context 日期应按 %s 算出 %s，实际 %s"
+                            % (expect_tz, want_date, got_date))
+    if seen == 0:
+        problems.append("没有任何出站体带 environment_context，时区断言全部落空")
     return problems
 
 
@@ -438,6 +525,24 @@ def check_rows(rows, cases, cross_check=True):
         for name in spec["forbidden_headers"]:
             if hdr(row, name) is not None:
                 problems.append("%s 不该发的头 %s=%r" % (label, name, hdr(row, name)))
+        want_encoding = spec["content_encoding"]
+        got_encoding = (hdr(row, "content-encoding") or "").strip().lower()
+        if want_encoding and got_encoding != want_encoding:
+            problems.append("%s 请求体编码 %r != %r（真客户端默认 enable_request_compression）"
+                            % (label, got_encoding, want_encoding))
+        if not want_encoding and got_encoding:
+            problems.append("%s 不该压缩的端点带了 content-encoding=%r" % (label, got_encoding))
+        # echo server 记录压缩体的前 6 字节：libzstd 流式 level 3 默认帧头 = magic + FHD 00（无 FCS / 无校验和 /
+        # 非 single segment）+ 窗口描述 58（2MB）。klauspost 的自选帧头（single segment / FCS / 小窗口）在这里会红。
+        raw_head = row.get("body_raw_head_hex")
+        if want_encoding == "zstd":
+            if raw_head is None or row.get("zstd_rc") is None:
+                problems.append("%s echo server 没记录 body_raw_head_hex / zstd_rc（未打 zstd 补丁），帧头断言不能静默跳过" % label)
+            else:
+                if raw_head.lower() != "28b52ffd0058":
+                    problems.append("%s zstd 帧头 %s != 28b52ffd0058（libzstd 流式默认）" % (label, raw_head))
+                if row.get("zstd_rc") != 0:
+                    problems.append("%s zstd 解压失败 rc=%s" % (label, row.get("zstd_rc")))
         for field in spec["required_body"]:
             value = jget(body, field)
             if not isinstance(value, str) or not value.strip():
@@ -445,13 +550,28 @@ def check_rows(rows, cases, cross_check=True):
         for field in spec.get("forbidden_body", []):
             if field in body:
                 problems.append("%s 不该有的 body 字段 %s" % (label, field))
+        if body and spec.get("body_order"):
+            problems += order_problems(label, list(body.keys()), spec["body_order"])
+        for name, raw in spec.get("namespaced_headers", {}).items():
+            got = hdr(row, name)
+            if not (got or "").strip():
+                problems.append("%s 缺必需头 %s" % (label, name))
+            elif got == raw:
+                problems.append("%s 头 %s 原值直通（必须按账号派生）" % (label, name))
+        for field in spec.get("required_metadata", []):
+            value = (meta_hdr or {}).get(field)
+            if not isinstance(value, str) or not value.strip():
+                problems.append("%s 缺必需 metadata 字段 %s" % (label, field))
+        for field in spec.get("forbidden_metadata", []):
+            if field in (meta_hdr or {}):
+                problems.append("%s 不该有的 metadata 字段 %s" % (label, field))
 
         beta = (hdr(row, "openai-beta") or "").lower()
         if FORBIDDEN_BETA in beta:
             problems.append("%s 仍在发旧的 openai-beta %s" % (label, FORBIDDEN_BETA))
         if meta_hdr is not None and "tool_namespaces_info" in meta_hdr:
             problems.append("%s 兼容头 turn-metadata 未剥掉 tool_namespaces_info" % label)
-        if meta_hdr is not None and meta_hdr.get("window_number") != WINDOW_NUMBER:
+        if spec.get("check_window_number", True) and meta_hdr is not None and meta_hdr.get("window_number") != WINDOW_NUMBER:
             problems.append("%s turn-metadata 的 window_number 被改写：%r != %r"
                             % (label, meta_hdr.get("window_number"), WINDOW_NUMBER))
         if meta_body is not None and meta_body.get("tool_namespaces_info") != TOOLS:
@@ -489,15 +609,25 @@ def check_rows(rows, cases, cross_check=True):
         if not ua.rstrip().endswith(")"):
             problems.append("%s UA 缺尾部客户端标识组" % label)
 
-        # 时区替换（可选断言）：只有声明了期望时区才判定，否则整体跳过。
-        if case.get("expect_env_timezone"):
-            problems += timezone_env_problems(body, SENTINEL_TZ, EXPECTED_TZ, label)
-        if case.get("expect_search_timezone"):
-            problems += search_location_problems(body, SENTINEL_TZ, EXPECTED_TZ, label)
-
     if cross_check:
         problems += cross_device_problems(devices)
     return problems, devices
+
+
+def order_problems(label, keys, order):
+    """keys 必须全在 order 里且是它的子序列（echo server 的 json.loads 保留原始键序）。"""
+    problems = []
+    at = 0
+    for key in keys:
+        if key not in order:
+            problems.append("%s 顶层字段 %s 不在字段序表里" % (label, key))
+            continue
+        idx = order.index(key)
+        if idx < at:
+            problems.append("%s 顶层字段序错乱：%s（实际 %s）" % (label, key, keys))
+            return problems
+        at = idx + 1
+    return problems
 
 
 def cross_device_problems(devices):
@@ -517,8 +647,10 @@ def selftest():
     base_headers = [["originator", "codex-tui"], ["user-agent", UA], ["version", "0.153.4"],
                     ["session-id", "S"], ["thread-id", "S"], ["x-client-request-id", "S"],
                     ["x-codex-window-id", "S:%d" % WINDOW_NUMBER],
-                    ["x-codex-turn-metadata", json.dumps(good_meta)]]
-    base_body = {"prompt_cache_key": "S",
+                    ["x-codex-turn-metadata", json.dumps(good_meta)],
+                    ["x-codex-inference-call-id", "DERIVED"],
+                    ["content-encoding", "zstd"]]
+    base_body = {"model": "gpt-5.4", "prompt_cache_key": "S",
                  "client_metadata": {"session_id": "S", "thread_id": "S",
                                      "x-codex-installation-id": "I",
                                      "x-codex-window-id": "S:%d" % WINDOW_NUMBER,
@@ -530,7 +662,8 @@ def selftest():
     def row(headers=None, body=None):
         return {"kind": "http", "path": "/backend-api/codex/responses",
                 "headers": [list(h) for h in (headers if headers is not None else base_headers)],
-                "body": json.loads(json.dumps(body if body is not None else base_body))}
+                "body": json.loads(json.dumps(body if body is not None else base_body)),
+                "body_raw_head_hex": "28b52ffd0058", "zstd_rc": 0}
 
     ok, _ = check_rows([row()], [case])
     if ok:
@@ -550,6 +683,48 @@ def selftest():
         ("缺必需头 session-id",
          [mutate(lambda h, b: h.remove(next(x for x in h if x[0] == "session-id")))], [case],
          "缺必需头"),
+        ("缺 version 头（provider 头每条请求都带）",
+         [mutate(lambda h, b: h.remove(next(x for x in h if x[0] == "version")))], [case],
+         "缺必需头 version"),
+        ("version 与 UA 版本段不同源",
+         [mutate(lambda h, b: h.__setitem__(
+             next(i for i, x in enumerate(h) if x[0] == "version"), ["version", "9.9.9"]))],
+         [case], "关系不成立"),
+        ("inference-call-id 原值直通",
+         [mutate(lambda h, b: h.__setitem__(
+             next(i for i, x in enumerate(h) if x[0] == "x-codex-inference-call-id"),
+             ["x-codex-inference-call-id", INFER_ID]))],
+         [case], "原值直通"),
+        ("inference-call-id 丢失",
+         [mutate(lambda h, b: h.remove(next(x for x in h if x[0] == "x-codex-inference-call-id")))],
+         [case], "缺必需头 x-codex-inference-call-id"),
+        ("/responses 请求体未压缩（真客户端默认 zstd）",
+         [mutate(lambda h, b: h.remove(next(x for x in h if x[0] == "content-encoding")))],
+         [case], "请求体编码"),
+        ("zstd 帧头不是 libzstd 流式默认（single segment + FCS）",
+         [dict(row(), body_raw_head_hex="28b52ffd605b")], [case], "zstd 帧头"),
+        ("echo server 未打 zstd 补丁（没记录帧头 / 解压结果）",
+         [{k: v for k, v in row().items() if k not in ("body_raw_head_hex", "zstd_rc")}], [case],
+         "没记录 body_raw_head_hex"),
+        ("zstd 体解压失败",
+         [dict(row(), zstd_rc=1)], [case], "解压失败"),
+        ("/responses 用了 gzip 而不是 zstd",
+         [mutate(lambda h, b: h.__setitem__(
+             next(i for i, x in enumerate(h) if x[0] == "content-encoding"), ["content-encoding", "gzip"]))],
+         [case], "请求体编码"),
+        ("compact 不该压缩却带了 content-encoding",
+         [dict(mutate(lambda h, b: (b.pop("client_metadata"), b.pop("prompt_cache_key", None),
+                                    b.__setitem__("prompt_cache_key", "S"),
+                                    h.remove(next(x for x in h if x[0] == "x-client-request-id")),
+                                    h.remove(next(x for x in h if x[0] == "x-codex-inference-call-id")),
+                                    h.append(["x-codex-installation-id", "I"]))),
+               path="/backend-api/codex/responses/compact")],
+         [dict(case, upstream="/backend-api/codex/responses/compact", contract="compact")],
+         "不该压缩的端点"),
+        ("顶层字段序错乱（map 字典序）",
+         [mutate(lambda h, b: (b.__setitem__("model", b.pop("model"))))], [case], "字段序错乱"),
+        ("未知顶层字段",
+         [mutate(lambda h, b: b.__setitem__("zzz_unknown", 1))], [case], "不在字段序表里"),
         ("多发独立安装头",
          [mutate(lambda h, b: h.append(["x-codex-installation-id", "I"]))], [case],
          "不该发的头"),
@@ -635,73 +810,170 @@ def selftest():
     else:
         print("  [ok] 反例被拦下：跨路径设备不一致")
 
+    failures += selftest_search()
     failures += selftest_ws()
-    failures += selftest_timezone()
+    failures += selftest_side_calls()
+    failures += selftest_env_timezone()
     print("\n自检结果：%s" % ("全部反例均被拦下" if failures == 0 else "%d 条未被拦下" % failures))
     return 1 if failures else 0
 
 
-def selftest_timezone():
-    """时区检查器的反例自检：这些样本不联网，纯构造。"""
+def selftest_side_calls():
+    """侧信道契约的反例；返回未被拦下的条数。"""
+    def inf(tid):
+        return {"kind": "http", "method": "POST", "path": "/backend-api/codex/responses",
+                "headers": [["thread-id", tid]]}
+
+    def side(path, headers=None, method="GET"):
+        return {"kind": "http", "method": method, "path": path,
+                "headers": headers if headers is not None
+                else [["authorization", "Bearer x"], ["user-agent", UA],
+                      ["chatgpt-account-id", "acct"]]}
+
+    bundle = "/backend-api/wham/config/bundle"
+    inference = [inf("S1"), inf("S2"),
+                 {"kind": "ws_handshake", "path": "/backend-api/codex/responses",
+                  "headers": [["thread-id", "stale-handshake-thread"]]},
+                 {"kind": "ws_message", "body": {"type": "response.create",
+                                                "client_metadata": {"thread_id": "S1"}}},
+                 {"kind": "ws_message", "body": {"type": "response.create",
+                                                "client_metadata": {"thread_id": "S3"}}}]
+    good = [side(SIDE_CALL_SETTINGS) for _ in range(3)]
     failures = 0
-    expected = "America/Los_Angeles"
-    dates = expected_dates(expected)
-    today = sorted(dates)[1] if dates else "2026-06-20"
-    # 明显超出 ±1 天容忍窗口的陈旧日期，用来验证"只改时区没改日期"会被拦下。
-    try:
-        from datetime import datetime, timedelta
-        from zoneinfo import ZoneInfo
-        stale = (datetime.now(ZoneInfo(expected)).date() - timedelta(days=5)).isoformat()
-    except Exception:
-        stale = "2000-01-01"
+    ok = check_side_calls(good, inference)
+    if ok:
+        print("[SELFTEST FAIL] 侧信道正样本被误报：%s" % ok)
+        failures += 1
+    else:
+        print("  [ok] 侧信道正样本：每线程一条 settings/user，没有别的账号面请求")
 
-    def env_body(tz, date=today, text_prefix=""):
-        text = "%s<environment_context>\n  <current_date>%s</current_date>\n  <timezone>%s</timezone>\n</environment_context>" % (text_prefix, date, tz)
-        return {"input": [{"type": "message", "role": "user",
-                           "content": [{"type": "input_text", "text": text}]}]}
-
-    def search_body(location, prompt=None):
-        body = {"settings": {"user_location": location}}
-        if prompt is not None:
-            body["input"] = [{"type": "message", "role": "user",
-                              "content": [{"type": "input_text", "text": prompt}]}]
-        return body
-
-    checks = [
-        ("时区正样本被误报", timezone_env_problems(env_body(expected), SENTINEL_TZ, expected, "T"), []),
-        ("环境块仍是探针时区",
-         timezone_env_problems(env_body(SENTINEL_TZ), SENTINEL_TZ, expected, "T"), "未被改写"),
-        ("环境块时区丢失", timezone_env_problems({"input": "hi"}, SENTINEL_TZ, expected, "T"),
-         "没有 <timezone>"),
-        ("环境块时区被改成别的区",
-         timezone_env_problems(env_body("Asia/Shanghai"), SENTINEL_TZ, expected, "T"), "!= 期望"),
-        ("声明期望值时未改写不报错",
-         timezone_env_problems(env_body(SENTINEL_TZ), SENTINEL_TZ, "", "T"), []),
-        ("user_location 正样本被误报",
-         search_location_problems(search_body({"timezone": expected}), SENTINEL_TZ, expected, "T"), []),
-        ("user_location 仍是探针时区",
-         search_location_problems(search_body({"timezone": SENTINEL_TZ}), SENTINEL_TZ, expected, "T"),
-         "未被改写"),
-        ("user_location 整个消失",
-         search_location_problems(search_body({}), SENTINEL_TZ, expected, "T"), "不该消失"),
-        ("prompt 副本没跟着改",
-         search_location_problems(
-             search_body({"timezone": expected},
-                         prompt='Search settings JSON:\n{"user_location":{"timezone":"%s"}}' % SENTINEL_TZ),
-             SENTINEL_TZ, expected, "T"), "settings 副本"),
+    negatives = [
+        ("补发了 config/bundle（个人 plan 的真客户端不发）",
+         good + [side(bundle)], inference, "未声明的账号面请求"),
+        ("settings/user 每请求都发（线程去重失效）",
+         good + [side(SIDE_CALL_SETTINGS)], inference, "settings/user"),
+        ("settings/user 漏了一个线程",
+         [side(SIDE_CALL_SETTINGS)], inference, "settings/user"),
+        ("侧信道用了 POST",
+         [side(SIDE_CALL_SETTINGS, method="POST"), side(SIDE_CALL_SETTINGS)], inference, "只读 GET"),
+        ("侧信道缺 authorization",
+         [side(SIDE_CALL_SETTINGS, headers=[["user-agent", UA], ["chatgpt-account-id", "acct"]]),
+          side(SIDE_CALL_SETTINGS)], inference, "缺 authorization"),
+        ("侧信道缺 chatgpt-account-id",
+         [side(SIDE_CALL_SETTINGS, headers=[["authorization", "Bearer x"], ["user-agent", UA]]),
+          side(SIDE_CALL_SETTINGS)], inference, "缺 chatgpt-account-id"),
+        ("侧信道带上了 originator",
+         [side(SIDE_CALL_SETTINGS, headers=[["authorization", "Bearer x"], ["user-agent", UA],
+                                            ["chatgpt-account-id", "acct"], ["originator", "codex-tui"]]),
+          side(SIDE_CALL_SETTINGS)], inference, "originator"),
+        ("多打了一个没声明的账号面接口",
+         good + [side("/backend-api/wham/whoami")], inference, "未声明的账号面请求"),
     ]
-    if dates:
-        checks.append(("只改时区没改日期",
-                       timezone_env_problems(env_body(expected, date=stale), SENTINEL_TZ, expected, "T"),
-                       "只改时区没改日期"))
-
-    for name, problems, expect in checks:
-        hit = (not problems) if expect == [] else any(expect in p for p in problems)
-        if not hit:
-            print("[SELFTEST FAIL] 时区反例「%s」判定错误，实得：%s" % (name, problems))
+    for name, side_rows, inf_rows, want in negatives:
+        problems = check_side_calls(side_rows, inf_rows)
+        if not any(want in p for p in problems):
+            print("[SELFTEST FAIL] 侧信道反例没被拦下：%s -> %s" % (name, problems))
             failures += 1
         else:
-            print("  [ok] 时区样本判定正确：%s" % name)
+            print("  [ok] 反例被拦下：%s" % name)
+    return failures
+
+
+def selftest_env_timezone():
+    """environment_context 时区改写的反例；返回未被拦下的条数。"""
+    def row(tz, date):
+        return {"kind": "http", "path": "/backend-api/codex/responses",
+                "body": {"input": [{"content": "<timezone>%s</timezone>"
+                                               "<current_date>%s</current_date>" % (tz, date)}]}}
+
+    failures = 0
+    # 与真实校验同一条取值路径。本机没有 IANA tz 数据库时 probe_date_in 会报错而不是静默放过，
+    # 那种情况下改为断言"缺库必须判红"，日期算式的正样本留给预演机（Debian 有 tzdata）。
+    expected_date = probe_date_in("Asia/Shanghai", [])
+
+    positives = [("未配时区：原样透传", [row(PROBE_ENV_TZ, PROBE_ENV_DATE)], None)]
+    negatives = [
+        ("配了时区但没改写", [row(PROBE_ENV_TZ, PROBE_ENV_DATE)], "Asia/Shanghai", "时区应改写"),
+        ("没配时区却被改写了", [row("Asia/Shanghai", "2026-01-01")], None, "原样透传"),
+        ("出站体里根本没有 environment_context", [{"kind": "http", "body": {"input": []}}], None,
+         "断言全部落空"),
+    ]
+    if expected_date:
+        positives.append(("配了时区：按固定历史时间换算", [row("Asia/Shanghai", expected_date)], "Asia/Shanghai"))
+        wrong_date = (datetime.date.fromisoformat(expected_date) + datetime.timedelta(days=1)).isoformat()
+        negatives.append(("改了时区但日期不对应创建时间", [row("Asia/Shanghai", wrong_date)],
+                          "Asia/Shanghai", "日期应按"))
+    else:
+        negatives.append(("本机缺 tz 数据库：必须判红而不是放过",
+                          [row("Asia/Shanghai", PROBE_ENV_DATE)], "Asia/Shanghai", "无法按时区"))
+        print("  [note] 本机没有 IANA tz 数据库，日期算式的正样本留给预演机")
+
+    for label, rows, expect in positives:
+        problems = check_environment_timezone(rows, expect)
+        if problems:
+            print("[SELFTEST FAIL] 时区正样本被误报：%s -> %s" % (label, problems))
+            failures += 1
+        else:
+            print("  [ok] 时区正样本：%s" % label)
+    for name, rows, expect, want in negatives:
+        problems = check_environment_timezone(rows, expect)
+        if not any(want in p for p in problems):
+            print("[SELFTEST FAIL] 时区反例没被拦下：%s -> %s" % (name, problems))
+            failures += 1
+        else:
+            print("  [ok] 反例被拦下：%s" % name)
+    return failures
+
+
+def selftest_search():
+    case = {"label": "search", "upstream": "/backend-api/codex/alpha/search", "contract": "search"}
+    good_meta = {"session_id": "S", "thread_id": "S", "turn_id": "T",
+                 "codex_version": "0.153.4", "model": "gpt-5.4"}
+
+    def row(metadata, version="0.153.4", model="gpt-5.4"):
+        return {"kind": "http", "path": case["upstream"],
+                "headers": [["originator", "codex-tui"], ["user-agent", UA], ["version", version],
+                            ["x-codex-turn-metadata", json.dumps(metadata)]],
+                "body": {"id": "S", "model": model}}
+
+    problems, devices = check_rows([row(good_meta)], [case])
+    if problems or devices:
+        print("[SELFTEST FAIL] 搜索 MCP 正样本被误报/当成设备载体：%s %s" % (problems, devices))
+        return 1
+    failures = 0
+    for name, rs, expect in [
+        ("搜索 metadata.codex_version 未对齐 version 头",
+         [row(dict(good_meta, codex_version="0.0.1"))], "关系不成立"),
+        ("搜索 metadata.model 未对齐出站 body.model",
+         [row(dict(good_meta, model="wrong-model"))], "关系不成立"),
+        ("搜索缺 version 头", [dict(row(good_meta), headers=[
+            ["originator", "codex-tui"], ["user-agent", UA],
+            ["x-codex-turn-metadata", json.dumps(good_meta)]])], "缺必需头 version"),
+    ]:
+        problems, _ = check_rows(rs, [case])
+        if not any(expect in p for p in problems):
+            print("[SELFTEST FAIL] 反例「%s」没有被 %r 捕获，实得：%s" % (name, expect, problems))
+            failures += 1
+        else:
+            print("  [ok] 反例被拦下：%s" % name)
+    for field in ("installation_id", "window_id", "window_number", "context_window_id",
+                  "agent_name", "parent_turn_id", "root_turn_id", "request_kind", "compaction",
+                  "history_ingest_requested", "forked_from_ordinal_exclusive", "tool_namespaces_info"):
+        problems, _ = check_rows([row(dict(good_meta, **{field: None}))], [case])
+        if not any("不该有的 metadata 字段 " + field in p for p in problems):
+            print("[SELFTEST FAIL] 搜索多发字段未被拦下：%s" % field)
+            failures += 1
+        else:
+            print("  [ok] 反例被拦下：搜索 metadata." + field)
+    for field in good_meta:
+        metadata = dict(good_meta)
+        del metadata[field]
+        problems, _ = check_rows([row(metadata)], [case])
+        if not any("缺必需 metadata 字段 " + field in p for p in problems):
+            print("[SELFTEST FAIL] 搜索缺字段未被拦下：%s" % field)
+            failures += 1
+        else:
+            print("  [ok] 反例被拦下：搜索缺 metadata." + field)
     return failures
 
 
@@ -720,6 +992,7 @@ def selftest_ws():
                   "client_metadata": {"session_id": "S", "thread_id": "S",
                                       "x-codex-installation-id": "I",
                                       "x-codex-window-id": "S:%d" % WINDOW_NUMBER,
+                                      "x-codex-turn-state": WS_TURN_STATE,
                                       "x-codex-turn-metadata": json.dumps(
                                           dict(good_meta, tool_namespaces_info=TOOLS))}}
 
@@ -735,6 +1008,10 @@ def selftest_ws():
             b["client_metadata"]["x-codex-turn-metadata"] = json.dumps(
                 dict(good_meta, window_id="S:%d" % number, window_number=number,
                      tool_namespaces_info=TOOLS))
+            b["client_metadata"]["x-codex-ws-stream-request-start-ms"] = "1700000000000"
+            if i == 1:
+                b["client_metadata"]["x-codex-turn-state"] = WS_OWN_TURN_STATE
+                b["client_metadata"]["x-codex-ws-stream-request-start-ms"] = WS_RESTAMPED
             if mutate_frame:
                 mutate_frame(i, b)
             out.append({"kind": "ws_message", "opcode": 1, "body": b})
@@ -820,6 +1097,37 @@ def selftest_ws():
                                                      tool_namespaces_info=TOOLS)))
               if i == 1 else None),
          "第2轮帧关系不成立"),
+        ("WS 握手带了 turn-state（真客户端握手传 None）",
+         rows(headers=hs_with("x-codex-turn-state", "TS")), "握手不该发的头"),
+        ("WS 握手缺 version 头（provider 头）",
+         rows(headers=hs_without("version")), "握手缺必需头 version"),
+        ("WS 握手 version 与 UA 版本段不同源",
+         rows(headers=hs_with("version", "9.9.9")), "握手关系不成立"),
+        ("WS 握手把 inference-call-id 带上了",
+         rows(headers=hs_with("x-codex-inference-call-id", "X")), "握手不该发的头"),
+        ("WS 首帧没有补入握手上的 turn-state",
+         rows(mutate_frame=lambda i, b: b["client_metadata"].pop("x-codex-turn-state")
+              if i == 0 else None),
+         "缺 client_metadata.x-codex-turn-state"),
+        ("WS 第二轮帧自带的 turn-state 被握手值覆盖",
+         rows(mutate_frame=lambda i, b: b["client_metadata"].__setitem__(
+             "x-codex-turn-state", WS_TURN_STATE) if i == 1 else None),
+         "turn-state 被覆盖"),
+        ("WS 帧顶层字段序错乱（type 不在最前）",
+         rows(mutate_frame=lambda i, b: b.__setitem__("type", b.pop("type"))),
+         "字段序错乱"),
+        ("WS 首帧没有盖 stream-request-start-ms",
+         rows(mutate_frame=lambda i, b: b["client_metadata"].pop("x-codex-ws-stream-request-start-ms")
+              if i == 0 else None),
+         "缺 client_metadata.x-codex-ws-stream-request-start-ms"),
+        ("WS 第二帧沿用了客户端自带的 stream-request-start-ms（没有在发送边界重盖）",
+         rows(mutate_frame=lambda i, b: b["client_metadata"].__setitem__(
+             "x-codex-ws-stream-request-start-ms", WS_OWN_STREAM_START) if i == 1 else None),
+         "没有在发送边界重盖"),
+        ("WS 帧 stream-request-start-ms 不是十进制毫秒",
+         rows(mutate_frame=lambda i, b: b["client_metadata"].__setitem__(
+             "x-codex-ws-stream-request-start-ms", "abc") if i == 0 else None),
+         "不是十进制毫秒"),
     ]
     for field in ("context_window_id", "turn_id", "root_turn_id"):
         for remove in (False, True):
@@ -864,9 +1172,14 @@ WS_HANDSHAKE_CONTRACT = {
     "required_headers": ["originator", "user-agent", "version", "session-id", "thread-id",
                          "x-client-request-id", "x-codex-window-id", "x-codex-turn-metadata",
                          "openai-beta"] + sorted(WS_CONDITIONAL),
-    "forbidden_headers": ["x-codex-installation-id", "session_id", "conversation_id"],
+    # 真客户端握手显式传 turn_state=None（core/src/client.rs:1241），turn-state 只在帧内
+    # client_metadata（client.rs:1792-1793，OnceLock 有值才带）；version 是 provider 头
+    # （model-provider-info/src/lib.rs:397），握手经 merge_request_headers 同样带。
+    "forbidden_headers": ["x-codex-turn-state", "x-codex-installation-id",
+                          "session_id", "conversation_id", "x-codex-inference-call-id"],
     "device_carrier": ["meta_install"],
     "relations": [
+        ("h:version", "expr:ua_version"),
         ("h:session-id", "h:thread-id"),
         ("h:thread-id", "h:x-client-request-id"),
         ("h:x-codex-window-id", "expr:thread_window"),
@@ -881,6 +1194,12 @@ WS_FRAME_CONTRACT = {
     "required_body": ["type", "prompt_cache_key", "client_metadata.session_id",
                       "client_metadata.thread_id", "client_metadata.x-codex-installation-id",
                       "client_metadata.x-codex-window-id", "client_metadata.x-codex-turn-metadata"],
+    # 首帧不带 turn-state → 网关用入站握手上的值补进帧内；第二帧自带 → 原样保留。
+    "turn_state_by_turn": {1: WS_TURN_STATE, 2: WS_OWN_TURN_STATE},
+    # 两帧都必须带十进制毫秒；第二帧自带的值必须被发送边界重盖，出站不得仍是它。
+    "stream_start_by_turn": {1: None, 2: None},
+    "stream_start_rejects": {2: WS_OWN_STREAM_START},
+    "body_order": WS_CREATE_ORDER,
     "relations": [
         ("b:client_metadata.thread_id", "h:thread-id"),
         ("b:client_metadata.x-codex-window-id", "expr:thread_window"),
@@ -927,6 +1246,14 @@ def ws_drain(sock, seconds):
     return True
 
 
+def ws_turn_state(session):
+    """探针入站握手上的不透明 turn-state。真客户端握手传 None（core/src/client.rs:1241），只在
+    帧内 client_metadata 携带（client.rs:1792-1793）；探针在入站握手上带一份，证明网关会把它
+    从出站握手上剥掉、补进不带 turn-state 的首帧，而第二帧自带的值原样保留。"""
+    _ = session
+    return WS_TURN_STATE
+
+
 def ws_probe(session, problems):
     """连一次网关 WS 入口，同一条连接上发两轮 response.create。失败直接记 problem。"""
     host, port = "127.0.0.1", 18080
@@ -937,9 +1264,10 @@ def ws_probe(session, problems):
         "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n"
         "authorization: Bearer %s\r\noriginator: codex-tui\r\nuser-agent: %s\r\nversion: 0.153.4\r\n"
         "session-id: %s\r\nthread-id: %s\r\nx-client-request-id: %s\r\n"
-        "x-codex-installation-id: %s\r\nx-codex-window-id: %s:%d\r\nx-codex-turn-metadata: %s\r\n%s\r\n"
+        "x-codex-installation-id: %s\r\nx-codex-window-id: %s:%d\r\nx-codex-turn-metadata: %s\r\n"
+        "x-codex-turn-state: %s\r\nx-codex-inference-call-id: %s\r\n%s\r\n"
         % (WS_PATH, host, port, key, KEY, UA, session, session, session, INSTALL,
-           session, WINDOW_NUMBER, tm,
+           session, WINDOW_NUMBER, tm, ws_turn_state(session), INFER_ID,
            "".join("%s: %s\r\n" % kv for kv in sorted(WS_CONDITIONAL.items())))
     )
     try:
@@ -958,12 +1286,13 @@ def ws_probe(session, problems):
             sock.close()
             return
         for turn in (1, 2):
+            cm = meta(session, WINDOW_NUMBER + turn - 1)
+            if turn == 2:
+                cm["x-codex-turn-state"] = WS_OWN_TURN_STATE
+                cm["x-codex-ws-stream-request-start-ms"] = WS_OWN_STREAM_START
             payload = {"type": "response.create", "model": "gpt-5.4", "stream": True,
-                       "prompt_cache_key": session,
-                       "client_metadata": meta(session, WINDOW_NUMBER + turn - 1),
-                       "input": [{"type": "message", "role": "user",
-                                  "content": [{"type": "input_text", "text": env_context()}]},
-                                 {"type": "message", "role": "user", "content": "hi %d" % turn}]}
+                       "prompt_cache_key": session, "client_metadata": cm,
+                       "input": resp_body(session, env_context=True)["input"]}
             sock.sendall(ws_frame(json.dumps(payload)))
             print("  sent: WS 第%d轮 response.create" % turn, flush=True)
             if not ws_drain(sock, 4):
@@ -1045,14 +1374,29 @@ def check_ws(rows, problems):
                 problems.append("WS 第%d轮帧缺必需 body 字段 %s" % (i, field))
         if fb.get("type") != "response.create":
             problems.append("WS 第%d轮帧不是 response.create" % i)
+        want_state = WS_FRAME_CONTRACT["turn_state_by_turn"].get(i)
+        got_state = cm.get("x-codex-turn-state")
+        if not got_state:
+            problems.append("WS 第%d轮帧缺 client_metadata.x-codex-turn-state（首帧应由握手值补入）" % i)
+        elif got_state != want_state:
+            problems.append("WS 第%d轮帧 turn-state 被覆盖或错位：%r != %r" % (i, got_state, want_state))
+        want_start = WS_FRAME_CONTRACT["stream_start_by_turn"].get(i)
+        got_start = cm.get("x-codex-ws-stream-request-start-ms")
+        if not isinstance(got_start, str) or not got_start.isdigit():
+            problems.append("WS 第%d轮帧缺 client_metadata.x-codex-ws-stream-request-start-ms 或不是十进制毫秒：%r"
+                            % (i, got_start))
+        elif want_start is not None and got_start != want_start:
+            problems.append("WS 第%d轮帧的 stream-request-start-ms 不是期望值：%r != %r" % (i, got_start, want_start))
+        elif got_start == WS_FRAME_CONTRACT["stream_start_rejects"].get(i):
+            problems.append("WS 第%d轮帧的 stream-request-start-ms 没有在发送边界重盖：%r" % (i, got_start))
+        if fb:
+            problems += order_problems("WS 第%d轮帧" % i, list(fb.keys()), WS_FRAME_CONTRACT["body_order"])
         for left, right in WS_FRAME_CONTRACT["relations"]:
             lv, rv = resolve(left, frame_ctx), resolve(right, frame_ctx)
             if lv is None or rv is None or lv != rv:
                 problems.append("WS 第%d轮帧关系不成立 %s(%r) != %s(%r)" % (i, left, lv, right, rv))
         if meta_body is not None and meta_body.get("tool_namespaces_info") != TOOLS:
             problems.append("WS 第%d轮帧体内工具清单被误删或改写" % i)
-        # 时区替换在 WS 路径同样生效（逐帧改写，见 applyCodexRequestTimezoneRaw）。
-        problems += timezone_env_problems(fb, SENTINEL_TZ, EXPECTED_TZ, "WS 第%d轮帧" % i)
         for field in ("session_id", "thread_id", "x-codex-installation-id"):
             if not cm.get(field):
                 problems.append("WS 第%d轮帧 client_metadata 缺 %s" % (i, field))
@@ -1079,31 +1423,16 @@ def send(case):
     print("  sent: %-16s curl_rc=%d" % (case["label"], proc.returncode), flush=True)
 
 
-def warm_up_timezone_probe(wait_seconds=5.0):
-    """先发一条带环境块的请求，让网关把"代理出口 IP -> 时区"的异步探测跑完并落缓存。
-    这条请求产生的捕获行在 start 之前读取，不参与断言。"""
-    if not EXPECTED_TZ:
-        return
-    probe = {"label": "W 热身", "path": "/v1/responses", "contract": "responses",
-             "upstream": "/backend-api/codex/responses",
-             "body": resp_body(sid(9)), "headers": codex_headers(sid(9))}
-    print("== 时区热身：先让网关完成一次代理时区探测 ==", flush=True)
-    send(probe)
-    time.sleep(wait_seconds)
-
-
 def main():
     if not KEY or any(ch in KEY for ch in "\r\n"):
         print("需要通过 SUB2API_REHEARSAL_API_KEY 提供有效的预演凭据", file=sys.stderr)
         return 2
+    if not EXPECT_TZ:
+        print("需要 --expect-timezone=<IANA 名|none> 声明该账号出站应自报的时区", file=sys.stderr)
+        return 2
     cases = build_cases()
-    warm_up_timezone_probe()
     start = sum(1 for _ in open(CAP))
     problems = []
-    if EXPECTED_TZ:
-        print("时区断言：期望 %s（探针故意发 %s）" % (EXPECTED_TZ, SENTINEL_TZ), flush=True)
-    else:
-        print("时区断言：跳过（未设置 SUB2API_REHEARSAL_TIMEZONE）", flush=True)
     print("== 发送 %d 个 HTTP 用例 + 1 条 WS 会话（全部落在 echo server，不出网） ==" % len(cases),
           flush=True)
     for case in cases:
@@ -1112,7 +1441,12 @@ def main():
     time.sleep(2)
 
     rows = [json.loads(l) for l in open(CAP)][start:]
-    http_rows = [r for r in rows if r.get("kind") == "http"]
+    def is_side_call(row):
+        return str(row.get("path", "")).startswith(SIDE_CALL_PREFIX)
+
+    all_http = [r for r in rows if r.get("kind") == "http"]
+    side_rows = [r for r in all_http if is_side_call(r)]
+    http_rows = [r for r in all_http if not is_side_call(r)]
     ws_rows = [r for r in rows if str(r.get("kind", "")).startswith("ws_")]
     print("\n== 捕获 %d 条 HTTP 出站 + %d 条 WS 事件 ==" % (len(http_rows), len(ws_rows)), flush=True)
     for r in http_rows:
@@ -1122,6 +1456,9 @@ def main():
 
     http_problems, devices = check_rows(http_rows, cases, cross_check=False)
     problems += http_problems
+    problems += check_side_calls(side_rows, http_rows + ws_rows)
+    problems += check_environment_timezone(http_rows, None if EXPECT_TZ == "none" else EXPECT_TZ)
+    problems += check_environment_timezone(ws_rows, None if EXPECT_TZ == "none" else EXPECT_TZ)
     for k, v in check_ws(ws_rows, problems).items():
         devices.setdefault(k, []).extend(v)
     problems += cross_device_problems(devices)
@@ -1135,7 +1472,7 @@ def main():
         for p in sorted(set(problems)):
             print("  [FAIL] " + p)
         return 1
-    print("  探针契约通过（%d HTTP 用例 + WS 两轮；第二轮窗口递增）" % len(cases))
+    print("  探针契约通过（%d HTTP 用例 + WS 两轮；第二轮窗口递增；侧信道 %d 条；时区期望 %s）" % (len(cases), len(side_rows), EXPECT_TZ))
     return 0
 
 

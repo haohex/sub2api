@@ -50,14 +50,6 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 	body = sanitizedBody
 
-	// klno 请求时区替换：standalone alpha/search 的 settings.user_location.timezone 同步成
-	// 账号出口时区（PAT 走下面的 web_search 桥接，在构造桥接请求时改写）。
-	if rewritten, changed, rewriteErr := applyCodexRequestTimezoneToAlphaSearchBody(account, body); rewriteErr != nil {
-		return nil, rewriteErr
-	} else if changed {
-		body = rewritten
-	}
-
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -159,13 +151,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if upstreamModel == "" {
 		upstreamModel = requestedModel
 	}
-	// klno 请求时区替换：只有该请求真的带 user_location 时才解析目标时区，避免无谓的
-	// 代理探测（与环境块改写同一取舍；开关未开或无代理时代理解析返回空串）。
-	timezone := ""
-	if gjson.GetBytes(alphaBody, "settings.user_location").IsObject() {
-		timezone = resolveCodexRequestTimezone(account)
-	}
-	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel, timezone)
+	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +229,13 @@ func openAIAlphaSearchSchedulingModel(account *Account, requestedModel string) s
 }
 
 func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx context.Context, c *gin.Context, account *Account, alphaBody []byte, body []byte, token string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
+	// 这条兜底同样打 /responses：双开按真客户端默认压缩（PersonalAccessToken 也 uses_codex_backend，
+	// protocol/src/auth.rs），同一账号不能压缩与明文混发。
+	wireBody, contentEncoding, err := compressCodexRequestBody(c, account, chatgptCodexURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(wireBody))
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +256,9 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	if turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); turnMetadata != "" {
@@ -299,13 +294,13 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), apiKeyID)
 	enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	account.ApplyHeaderOverrides(req.Header)
+	// 这条兜底打的是 /responses：双开账号的头也要按线协议投影收口，否则同一账号出现
+	// 「双开的体 + 非双开的头」两种形态（体已按双开压缩，见 compressCodexRequestBody）。
+	applyCodexDeviceWireProfile(c, account, req.Header, false)
 	return req, nil
 }
 
-// buildOpenAIAlphaSearchResponsesWebSearchBody 组装桥接请求。
-// timezone 非空时（klno 请求时区替换）：把 web_search 的 user_location.timezone 与
-// prompt 里那份 settings JSON 的同一字段一起改写成目标时区，两处必须同值。
-func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string, timezone string) ([]byte, error) {
+func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string) ([]byte, error) {
 	if strings.TrimSpace(model) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -316,7 +311,6 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 	if userLocation := gjson.GetBytes(alphaBody, "settings.user_location"); userLocation.IsObject() {
 		var loc map[string]any
 		if err := json.Unmarshal([]byte(userLocation.Raw), &loc); err == nil && len(loc) > 0 {
-			applyCodexSearchLocationTimezone(loc, timezone)
 			tool["user_location"] = loc
 		}
 	}
@@ -330,7 +324,7 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 				"content": []any{
 					map[string]any{
 						"type": "input_text",
-						"text": openAIAlphaSearchResponsesWebSearchPrompt(alphaBody, timezone),
+						"text": openAIAlphaSearchResponsesWebSearchPrompt(alphaBody),
 					},
 				},
 			},
@@ -340,7 +334,7 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 	return json.Marshal(payload)
 }
 
-func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte, timezone string) string {
+func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte) string {
 	var b strings.Builder
 	_, _ = b.WriteString("Execute this Codex standalone web.run request for another model.\n")
 	_, _ = b.WriteString("Use the hosted web_search tool when web/current information is needed.\n")
@@ -350,13 +344,6 @@ func openAIAlphaSearchResponsesWebSearchPrompt(alphaBody []byte, timezone string
 		_, _ = b.WriteString(truncateOpenAIAlphaSearchPromptJSON(commands, 12000))
 	}
 	if settings := strings.TrimSpace(gjson.GetBytes(alphaBody, "settings").Raw); settings != "" {
-		// klno 请求时区替换：prompt 里嵌的这份 settings 与 tools[].user_location 是同一份
-		// 客户端声明的两个副本，必须一起改写，否则模型看到的位置与搜索工具用的位置对不上。
-		if timezone != "" && gjson.Get(settings, "user_location.timezone").Exists() {
-			if patched, err := sjson.SetBytes([]byte(settings), "user_location.timezone", timezone); err == nil {
-				settings = string(patched)
-			}
-		}
 		_, _ = b.WriteString("\n\nSearch settings JSON:\n")
 		_, _ = b.WriteString(truncateOpenAIAlphaSearchPromptJSON(settings, 4000))
 	}
@@ -426,14 +413,13 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 			req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
 		}
 		applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
-		// 设备指纹收敛只作用于已有的 turn-metadata：真实客户端在该端点只发
-		// x-codex-turn-metadata 与 originator（codex-rs ext/web-search/src/tool.rs 的
-		// search_request_headers），不发会话头，故不能补入 Responses 的那一套。
-		// 不做收敛时 installation_id 仍是按客户端原值派生的，与推理面的固定设备不一致。
-		if ids := resolveCodexFingerprintIDsFromRequest(c, account, nil); ids != nil {
-			rewriteCodexTurnMetadataFields(req.Header, map[string]any{
-				"installation_id": ids.installationID,
-			}, ids)
+		// 双开使用 MCP 投影，不补 Responses 专属设备字段；其他配置维持既有行为。
+		if !codexDeviceWireProfileEnabled(c, account) {
+			if ids := resolveCodexFingerprintIDsFromRequest(c, account, nil); ids != nil {
+				rewriteCodexTurnMetadataFields(req.Header, map[string]any{
+					"installation_id": ids.installationID,
+				}, ids)
+			}
 		}
 		canonical := resolveCodexOutboundIdentity("")
 		if version := openAIAlphaSearchInboundHeader(c, "Version"); version != "" {
@@ -461,7 +447,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 
 	account.ApplyHeaderOverrides(req.Header)
 	stripOpenAIAlphaSearchResponsesHeaders(req.Header)
-	applyCodexDeviceWireProfile(c, account, req.Header, false)
+	applyCodexAlphaSearchWireProfile(c, account, req.Header, body)
 	syncOpenAIAlphaSearchBodySession(c, req, body)
 	return req, nil
 }
