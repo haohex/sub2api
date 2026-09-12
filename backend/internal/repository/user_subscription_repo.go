@@ -435,6 +435,21 @@ func (r *userSubscriptionRepository) ResetFiveHourUsage(ctx context.Context, id 
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
+func (r *userSubscriptionRepository) ResetFiveHourUsageIfWindow(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	client := clientFromContext(ctx, r.client)
+	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
+	if expectedWindowStart == nil {
+		query = query.Where(usersubscription.FiveHourWindowStartIsNil())
+	} else {
+		query = query.Where(usersubscription.FiveHourWindowStartEQ(*expectedWindowStart))
+	}
+	n, err := query.
+		SetFiveHourUsageUsd(0).
+		SetFiveHourWindowStart(newWindowStart).
+		Save(ctx)
+	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+}
+
 func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
 	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))

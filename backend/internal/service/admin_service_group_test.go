@@ -816,6 +816,37 @@ func TestAdminService_UpdateGroup_LimitFieldsPartialUpdate(t *testing.T) {
 	})
 }
 
+func TestAdminService_UpdateGroup_MonthlyFollowResetPolicyBumpsConfigVersion(t *testing.T) {
+	monthlyLimit := 100.0
+	sourceID := int64(42)
+	existingGroup := &Group{
+		ID:                          1,
+		Name:                        "openai-subscription",
+		Platform:                    PlatformOpenAI,
+		Status:                      StatusActive,
+		SubscriptionType:            SubscriptionTypeSubscription,
+		MonthlyLimitUSD:             &monthlyLimit,
+		QuotaResetSourceAccountID:   &sourceID,
+		QuotaResetSourceAccountName: "source@example.com",
+		QuotaResetIncludeMonthly:    false,
+		QuotaResetConfigVersion:     4,
+		QuotaResetSourceValid:       true,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{groupRepo: repo}
+	includeMonthly := true
+
+	updated, err := svc.UpdateGroup(context.Background(), existingGroup.ID, &UpdateGroupInput{
+		QuotaResetIncludeMonthly: &includeMonthly,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.True(t, repo.updated.QuotaResetIncludeMonthly)
+	require.Equal(t, int64(5), repo.updated.QuotaResetConfigVersion)
+	require.True(t, repo.updated.QuotaResetSourceChanged)
+}
+
 func TestAdminService_UpdateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {
 	existingGroup := &Group{
 		ID:                        1,

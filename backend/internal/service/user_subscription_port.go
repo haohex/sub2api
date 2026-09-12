@@ -51,6 +51,14 @@ type FiveHourSubscriptionQuotaRepository interface {
 	ResetFiveHourUsage(ctx context.Context, id int64, newWindowStart time.Time) error
 }
 
+// ConditionalFiveHourSubscriptionQuotaRepository advances an expired rolling
+// window only when the caller's snapshot is still current. Implementations
+// must treat a competing reset as a successful no-op, matching the other
+// conditional window reset methods.
+type ConditionalFiveHourSubscriptionQuotaRepository interface {
+	ResetFiveHourUsageIfWindow(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error
+}
+
 // AtomicSubscriptionUsageWindowsResetRepository is an optional extension for
 // resetting several windows in one database update.
 type AtomicSubscriptionUsageWindowsResetRepository interface {

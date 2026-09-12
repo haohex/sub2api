@@ -952,6 +952,20 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		needsInvalidateCache = true
 	}
 
+	// The rolling five-hour window is activated lazily by billing. Once it
+	// expires, advance it with a compare-and-swap so maintenance cannot clear a
+	// usage update that won a concurrent billing race.
+	if sub.NeedsFiveHourResetAt(now) {
+		if repo, ok := s.userSubRepo.(ConditionalFiveHourSubscriptionQuotaRepository); ok {
+			if err := repo.ResetFiveHourUsageIfWindow(ctx, sub.ID, sub.FiveHourWindowStart, now); err != nil {
+				return err
+			}
+			sub.FiveHourUsageUSD = 0
+			sub.FiveHourWindowStart = &now
+			needsInvalidateCache = true
+		}
+	}
+
 	// 如果有窗口被重置，失效缓存以保持一致性
 	if needsInvalidateCache {
 		s.InvalidateSubCache(sub.UserID, sub.GroupID)
@@ -1039,6 +1053,7 @@ func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, grou
 	}
 	if sub.NeedsFiveHourResetAt(now) {
 		sub.FiveHourUsageUSD = 0
+		needsMaintenance = true
 	}
 	if !sub.IsWindowActivated() {
 		needsMaintenance = true

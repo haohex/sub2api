@@ -24,9 +24,23 @@ type monthlyResetUserSubRepo struct {
 	resetAt     time.Time
 }
 
+type fiveHourResetUserSubRepo struct {
+	userSubRepoNoop
+	resetCalled    bool
+	expectedWindow *time.Time
+	newWindowStart time.Time
+}
+
 func (r *monthlyResetUserSubRepo) ResetMonthlyUsage(_ context.Context, _ int64, _ *time.Time, resetAt time.Time) error {
 	r.resetCalled = true
 	r.resetAt = resetAt
+	return nil
+}
+
+func (r *fiveHourResetUserSubRepo) ResetFiveHourUsageIfWindow(_ context.Context, _ int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	r.resetCalled = true
+	r.expectedWindow = expectedWindowStart
+	r.newWindowStart = newWindowStart
 	return nil
 }
 
@@ -115,6 +129,51 @@ func TestCheckAndResetWindowsResetsPartialFinalMonthlySubscriptions(t *testing.T
 			require.Zero(t, sub.MonthlyUsageUSD)
 		})
 	}
+}
+
+func TestCheckAndResetWindowsResetsExpiredFiveHourWindow(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	windowStart := now.Add(-6 * time.Hour)
+	repo := &fiveHourResetUserSubRepo{}
+	svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
+	svc.now = func() time.Time { return now }
+	sub := &UserSubscription{
+		ID:                  3,
+		StartsAt:            now.Add(-24 * time.Hour),
+		ExpiresAt:           now.Add(24 * time.Hour),
+		FiveHourWindowStart: &windowStart,
+		FiveHourUsageUSD:    12,
+	}
+
+	require.NoError(t, svc.CheckAndResetWindows(context.Background(), sub))
+	require.True(t, repo.resetCalled)
+	require.Equal(t, &windowStart, repo.expectedWindow)
+	require.Equal(t, now, repo.newWindowStart)
+	require.Zero(t, sub.FiveHourUsageUSD)
+	require.Equal(t, now, *sub.FiveHourWindowStart)
+}
+
+func TestValidateAndCheckLimitsSchedulesExpiredFiveHourMaintenance(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	dailyWindowStart := now
+	fiveHourWindowStart := now.Add(-6 * time.Hour)
+	limit := 100.0
+	sub := &UserSubscription{
+		Status:              SubscriptionStatusActive,
+		StartsAt:            now.Add(-24 * time.Hour),
+		ExpiresAt:           now.Add(24 * time.Hour),
+		DailyWindowStart:    &dailyWindowStart,
+		FiveHourWindowStart: &fiveHourWindowStart,
+		FiveHourUsageUSD:    limit,
+	}
+	svc := NewSubscriptionService(groupRepoNoop{}, userSubRepoNoop{}, nil, nil, nil)
+	svc.now = func() time.Time { return now }
+
+	needsMaintenance, err := svc.ValidateAndCheckLimits(sub, &Group{FiveHourLimitUSD: &limit})
+
+	require.NoError(t, err)
+	require.True(t, needsMaintenance)
+	require.Zero(t, sub.FiveHourUsageUSD)
 }
 
 func TestNormalizeExpiredWindowsKeepsLegacyMonthlyUsageBeforeExpiry(t *testing.T) {

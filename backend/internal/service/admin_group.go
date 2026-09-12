@@ -791,6 +791,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
 	previousPlatform := group.Platform
 	previousQuotaResetVersion := group.QuotaResetConfigVersion
+	previousQuotaResetIncludeMonthly := group.QuotaResetIncludeMonthly
 
 	if input.Name != "" {
 		group.Name = input.Name
@@ -863,6 +864,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			group.QuotaResetSourceResetAt = nil
 			group.QuotaResetSourceValid = true
 			group.QuotaResetConfigVersion++
+		} else if !group.QuotaResetSourceValid && group.SupportsOpenAIQuotaFollowReset() && s.accountRepo != nil {
+			// The source may have been invalid when the group was loaded and
+			// become valid again before this edit. Re-resolve the same ID so an
+			// admin does not need to switch away and back to repair the binding.
+			account, resolveErr := s.resolveOpenAIQuotaResetSource(ctx, *input.QuotaResetSourceAccountID)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			group.QuotaResetSourceAccountName = account.Name
+			group.QuotaResetSourceResetAt = nil
+			group.QuotaResetSourceValid = true
+			group.QuotaResetConfigVersion++
 		}
 	}
 	if input.QuotaResetIncludeMonthly != nil {
@@ -879,6 +892,14 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.QuotaResetSourceValid = false
 	} else if group.QuotaResetSourceAccountID == nil || group.MonthlyLimitUSD == nil {
 		group.QuotaResetIncludeMonthly = false
+	}
+	// The monthly-reset policy is part of the event identity. Invalidate any
+	// pending events when it changes, but keep one version increment per update
+	// because the repository's optimistic compare-and-swap expects that delta.
+	if group.QuotaResetConfigVersion == previousQuotaResetVersion &&
+		group.QuotaResetSourceAccountID != nil &&
+		group.QuotaResetIncludeMonthly != previousQuotaResetIncludeMonthly {
+		group.QuotaResetConfigVersion++
 	}
 	group.QuotaResetSourceChanged = group.QuotaResetConfigVersion != previousQuotaResetVersion
 	// 图片生成计费配置：负数表示清除（使用默认价格）
