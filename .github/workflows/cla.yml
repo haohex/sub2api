@@ -37,7 +37,7 @@ jobs:
           path-to-signatures: "cla.json"
           path-to-document: "https://github.com/haohex/sub2api/blob/main/CLA.md"
           branch: "cla-signatures"
-          allowlist: "haohex,dependabot[bot],renovate[bot],bot*"
+          allowlist: "KlN-4096,haohex,dependabot[bot],renovate[bot],bot*"
           lock-pullrequest-aftermerge: false
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can merge this PR, we need $you to sign our [Contributor License Agreement (CLA)](https://github.com/haohex/sub2api/blob/main/CLA.md).
