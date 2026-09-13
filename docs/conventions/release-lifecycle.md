@@ -44,4 +44,4 @@
 
 ## 上游同步
 
-KlN 仍以正式 Release tag 建立单个审查 PR。Wei-Shaw 同步保留本地 rebase、定向测试和身份漂移检查，但只推送 `sync/wei-release/<tag>` 审查分支，不再强推 klno/main 或直接发布。产品 main 不再作为可随意重建的 cron 宿主。
+KlN 仍以正式 Release tag 建立单个审查 PR。上游 Release 只触发同步分支和审查 PR，不创建 draft/pre-release，也不构建或发布产品版本；同步 PR 合并后由维护者手动创建 GitHub Release。Wei-Shaw 同步保留本地 rebase、定向测试和身份漂移检查，但只推送 `sync/wei-release/<tag>` 审查分支，不再强推 klno/main 或直接发布。产品 main 不再作为可随意重建的 cron 宿主。
