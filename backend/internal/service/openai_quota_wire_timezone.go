@@ -63,7 +63,12 @@ func (s *OpenAIQuotaService) refreshCodexWireTimezone(ctx context.Context, accou
 			return
 		}
 		// 量的必须是这条链路真正会用的出口：代理取值与转发侧同一个表达式。
-		exitIP, timezone, err := s.lookupCodexWireTimezone(ctx, codexWireTimezoneProxyURL(account))
+		proxyURL, err := resolveConfiguredProxyURL(ctx, s.proxyRepo, account.ProxyID, account.Proxy)
+		if err != nil {
+			slog.Warn("codex_wire_timezone_proxy_failed", "account_id", accountID, "error", err)
+			return
+		}
+		exitIP, timezone, err := s.lookupCodexWireTimezone(ctx, proxyURL)
 		if err != nil {
 			slog.Warn("codex_wire_timezone_lookup_failed", "account_id", accountID, "error", err)
 			return
