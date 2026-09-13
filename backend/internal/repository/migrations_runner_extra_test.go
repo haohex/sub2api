@@ -104,12 +104,29 @@ func TestMigrationChecksumCompatibilityRules_CoverEditedUpgradeCompatibilityMigr
 		"118_wechat_dual_mode_and_auth_source_defaults.sql",
 		"120_enforce_payment_orders_out_trade_no_unique_notx.sql",
 		"123_fix_legacy_auth_source_grant_on_signup_defaults.sql",
+		"226_channel_monitor_quota_mode.sql",
 	} {
 		rule, ok := migrationChecksumCompatibilityRules[name]
 		require.Truef(t, ok, "missing compatibility rule for %s", name)
 		require.NotEmpty(t, rule.fileChecksum)
 		require.NotEmpty(t, rule.acceptedDBChecksum)
 	}
+}
+
+func TestMigrationChecksumCompatibilityRules_PlusCustom003ChannelMonitor(t *testing.T) {
+	rule, ok := migrationChecksumCompatibilityRules["226_channel_monitor_quota_mode.sql"]
+	require.True(t, ok)
+	require.Equal(t, "c01c87739b5b0b10ee0f21c89e9652d10106c639d131484e4ad39f72cc7b586c", rule.fileChecksum)
+	require.True(t, isMigrationChecksumCompatible(
+		"226_channel_monitor_quota_mode.sql",
+		"c36c6c0ec6cc8727bb986e8cdc645990dcf8dad8f56a8c4647422e24e9dff88",
+		rule.fileChecksum,
+	))
+	require.False(t, isMigrationChecksumCompatible(
+		"226_channel_monitor_quota_mode.sql",
+		"unexpected-db-checksum",
+		rule.fileChecksum,
+	))
 }
 
 func TestEnsureAtlasBaselineAligned(t *testing.T) {

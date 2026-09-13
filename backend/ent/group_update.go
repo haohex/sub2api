@@ -318,6 +318,33 @@ func (_u *GroupUpdate) ClearMonthlyLimitUsd() *GroupUpdate {
 	return _u
 }
 
+// SetFiveHourLimitUsd sets the "five_hour_limit_usd" field.
+func (_u *GroupUpdate) SetFiveHourLimitUsd(v float64) *GroupUpdate {
+	_u.mutation.ResetFiveHourLimitUsd()
+	_u.mutation.SetFiveHourLimitUsd(v)
+	return _u
+}
+
+// SetNillableFiveHourLimitUsd sets the "five_hour_limit_usd" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableFiveHourLimitUsd(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetFiveHourLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddFiveHourLimitUsd adds value to the "five_hour_limit_usd" field.
+func (_u *GroupUpdate) AddFiveHourLimitUsd(v float64) *GroupUpdate {
+	_u.mutation.AddFiveHourLimitUsd(v)
+	return _u
+}
+
+// ClearFiveHourLimitUsd clears the value of the "five_hour_limit_usd" field.
+func (_u *GroupUpdate) ClearFiveHourLimitUsd() *GroupUpdate {
+	_u.mutation.ClearFiveHourLimitUsd()
+	return _u
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_u *GroupUpdate) SetDefaultValidityDays(v int) *GroupUpdate {
 	_u.mutation.ResetDefaultValidityDays()
@@ -336,6 +363,102 @@ func (_u *GroupUpdate) SetNillableDefaultValidityDays(v *int) *GroupUpdate {
 // AddDefaultValidityDays adds value to the "default_validity_days" field.
 func (_u *GroupUpdate) AddDefaultValidityDays(v int) *GroupUpdate {
 	_u.mutation.AddDefaultValidityDays(v)
+	return _u
+}
+
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (_u *GroupUpdate) SetQuotaResetSourceAccountID(v int64) *GroupUpdate {
+	_u.mutation.ResetQuotaResetSourceAccountID()
+	_u.mutation.SetQuotaResetSourceAccountID(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableQuotaResetSourceAccountID(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetQuotaResetSourceAccountID(*v)
+	}
+	return _u
+}
+
+// AddQuotaResetSourceAccountID adds value to the "quota_reset_source_account_id" field.
+func (_u *GroupUpdate) AddQuotaResetSourceAccountID(v int64) *GroupUpdate {
+	_u.mutation.AddQuotaResetSourceAccountID(v)
+	return _u
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (_u *GroupUpdate) ClearQuotaResetSourceAccountID() *GroupUpdate {
+	_u.mutation.ClearQuotaResetSourceAccountID()
+	return _u
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (_u *GroupUpdate) SetQuotaResetSourceAccountName(v string) *GroupUpdate {
+	_u.mutation.SetQuotaResetSourceAccountName(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableQuotaResetSourceAccountName(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetQuotaResetSourceAccountName(*v)
+	}
+	return _u
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (_u *GroupUpdate) SetQuotaResetSourceResetAt(v time.Time) *GroupUpdate {
+	_u.mutation.SetQuotaResetSourceResetAt(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableQuotaResetSourceResetAt(v *time.Time) *GroupUpdate {
+	if v != nil {
+		_u.SetQuotaResetSourceResetAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (_u *GroupUpdate) ClearQuotaResetSourceResetAt() *GroupUpdate {
+	_u.mutation.ClearQuotaResetSourceResetAt()
+	return _u
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (_u *GroupUpdate) SetQuotaResetIncludeMonthly(v bool) *GroupUpdate {
+	_u.mutation.SetQuotaResetIncludeMonthly(v)
+	return _u
+}
+
+// SetNillableQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableQuotaResetIncludeMonthly(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetQuotaResetIncludeMonthly(*v)
+	}
+	return _u
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (_u *GroupUpdate) SetQuotaResetConfigVersion(v int64) *GroupUpdate {
+	_u.mutation.ResetQuotaResetConfigVersion()
+	_u.mutation.SetQuotaResetConfigVersion(v)
+	return _u
+}
+
+// SetNillableQuotaResetConfigVersion sets the "quota_reset_config_version" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableQuotaResetConfigVersion(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetQuotaResetConfigVersion(*v)
+	}
+	return _u
+}
+
+// AddQuotaResetConfigVersion adds value to the "quota_reset_config_version" field.
+func (_u *GroupUpdate) AddQuotaResetConfigVersion(v int64) *GroupUpdate {
+	_u.mutation.AddQuotaResetConfigVersion(v)
 	return _u
 }
 
@@ -1513,6 +1636,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.QuotaResetSourceAccountName(); ok {
+		if err := group.QuotaResetSourceAccountNameValidator(v); err != nil {
+			return &ValidationError{Name: "quota_reset_source_account_name", err: fmt.Errorf(`ent: validator failed for field "Group.quota_reset_source_account_name": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -1644,11 +1772,47 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(group.FieldMonthlyLimitUsd, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.FiveHourLimitUsd(); ok {
+		_spec.SetField(group.FieldFiveHourLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedFiveHourLimitUsd(); ok {
+		_spec.AddField(group.FieldFiveHourLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.FiveHourLimitUsdCleared() {
+		_spec.ClearField(group.FieldFiveHourLimitUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AddedDefaultValidityDays(); ok {
 		_spec.AddField(group.FieldDefaultValidityDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceAccountID(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaResetSourceAccountID(); ok {
+		_spec.AddField(group.FieldQuotaResetSourceAccountID, field.TypeInt64, value)
+	}
+	if _u.mutation.QuotaResetSourceAccountIDCleared() {
+		_spec.ClearField(group.FieldQuotaResetSourceAccountID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceAccountName(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceResetAt(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceResetAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaResetSourceResetAtCleared() {
+		_spec.ClearField(group.FieldQuotaResetSourceResetAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaResetIncludeMonthly(); ok {
+		_spec.SetField(group.FieldQuotaResetIncludeMonthly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.QuotaResetConfigVersion(); ok {
+		_spec.SetField(group.FieldQuotaResetConfigVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaResetConfigVersion(); ok {
+		_spec.AddField(group.FieldQuotaResetConfigVersion, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
@@ -2512,6 +2676,33 @@ func (_u *GroupUpdateOne) ClearMonthlyLimitUsd() *GroupUpdateOne {
 	return _u
 }
 
+// SetFiveHourLimitUsd sets the "five_hour_limit_usd" field.
+func (_u *GroupUpdateOne) SetFiveHourLimitUsd(v float64) *GroupUpdateOne {
+	_u.mutation.ResetFiveHourLimitUsd()
+	_u.mutation.SetFiveHourLimitUsd(v)
+	return _u
+}
+
+// SetNillableFiveHourLimitUsd sets the "five_hour_limit_usd" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableFiveHourLimitUsd(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetFiveHourLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddFiveHourLimitUsd adds value to the "five_hour_limit_usd" field.
+func (_u *GroupUpdateOne) AddFiveHourLimitUsd(v float64) *GroupUpdateOne {
+	_u.mutation.AddFiveHourLimitUsd(v)
+	return _u
+}
+
+// ClearFiveHourLimitUsd clears the value of the "five_hour_limit_usd" field.
+func (_u *GroupUpdateOne) ClearFiveHourLimitUsd() *GroupUpdateOne {
+	_u.mutation.ClearFiveHourLimitUsd()
+	return _u
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_u *GroupUpdateOne) SetDefaultValidityDays(v int) *GroupUpdateOne {
 	_u.mutation.ResetDefaultValidityDays()
@@ -2530,6 +2721,102 @@ func (_u *GroupUpdateOne) SetNillableDefaultValidityDays(v *int) *GroupUpdateOne
 // AddDefaultValidityDays adds value to the "default_validity_days" field.
 func (_u *GroupUpdateOne) AddDefaultValidityDays(v int) *GroupUpdateOne {
 	_u.mutation.AddDefaultValidityDays(v)
+	return _u
+}
+
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (_u *GroupUpdateOne) SetQuotaResetSourceAccountID(v int64) *GroupUpdateOne {
+	_u.mutation.ResetQuotaResetSourceAccountID()
+	_u.mutation.SetQuotaResetSourceAccountID(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableQuotaResetSourceAccountID(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetQuotaResetSourceAccountID(*v)
+	}
+	return _u
+}
+
+// AddQuotaResetSourceAccountID adds value to the "quota_reset_source_account_id" field.
+func (_u *GroupUpdateOne) AddQuotaResetSourceAccountID(v int64) *GroupUpdateOne {
+	_u.mutation.AddQuotaResetSourceAccountID(v)
+	return _u
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (_u *GroupUpdateOne) ClearQuotaResetSourceAccountID() *GroupUpdateOne {
+	_u.mutation.ClearQuotaResetSourceAccountID()
+	return _u
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (_u *GroupUpdateOne) SetQuotaResetSourceAccountName(v string) *GroupUpdateOne {
+	_u.mutation.SetQuotaResetSourceAccountName(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableQuotaResetSourceAccountName(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetQuotaResetSourceAccountName(*v)
+	}
+	return _u
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (_u *GroupUpdateOne) SetQuotaResetSourceResetAt(v time.Time) *GroupUpdateOne {
+	_u.mutation.SetQuotaResetSourceResetAt(v)
+	return _u
+}
+
+// SetNillableQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableQuotaResetSourceResetAt(v *time.Time) *GroupUpdateOne {
+	if v != nil {
+		_u.SetQuotaResetSourceResetAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (_u *GroupUpdateOne) ClearQuotaResetSourceResetAt() *GroupUpdateOne {
+	_u.mutation.ClearQuotaResetSourceResetAt()
+	return _u
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (_u *GroupUpdateOne) SetQuotaResetIncludeMonthly(v bool) *GroupUpdateOne {
+	_u.mutation.SetQuotaResetIncludeMonthly(v)
+	return _u
+}
+
+// SetNillableQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableQuotaResetIncludeMonthly(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetQuotaResetIncludeMonthly(*v)
+	}
+	return _u
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (_u *GroupUpdateOne) SetQuotaResetConfigVersion(v int64) *GroupUpdateOne {
+	_u.mutation.ResetQuotaResetConfigVersion()
+	_u.mutation.SetQuotaResetConfigVersion(v)
+	return _u
+}
+
+// SetNillableQuotaResetConfigVersion sets the "quota_reset_config_version" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableQuotaResetConfigVersion(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetQuotaResetConfigVersion(*v)
+	}
+	return _u
+}
+
+// AddQuotaResetConfigVersion adds value to the "quota_reset_config_version" field.
+func (_u *GroupUpdateOne) AddQuotaResetConfigVersion(v int64) *GroupUpdateOne {
+	_u.mutation.AddQuotaResetConfigVersion(v)
 	return _u
 }
 
@@ -3720,6 +4007,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.QuotaResetSourceAccountName(); ok {
+		if err := group.QuotaResetSourceAccountNameValidator(v); err != nil {
+			return &ValidationError{Name: "quota_reset_source_account_name", err: fmt.Errorf(`ent: validator failed for field "Group.quota_reset_source_account_name": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -3868,11 +4160,47 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(group.FieldMonthlyLimitUsd, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.FiveHourLimitUsd(); ok {
+		_spec.SetField(group.FieldFiveHourLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedFiveHourLimitUsd(); ok {
+		_spec.AddField(group.FieldFiveHourLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.FiveHourLimitUsdCleared() {
+		_spec.ClearField(group.FieldFiveHourLimitUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AddedDefaultValidityDays(); ok {
 		_spec.AddField(group.FieldDefaultValidityDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceAccountID(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaResetSourceAccountID(); ok {
+		_spec.AddField(group.FieldQuotaResetSourceAccountID, field.TypeInt64, value)
+	}
+	if _u.mutation.QuotaResetSourceAccountIDCleared() {
+		_spec.ClearField(group.FieldQuotaResetSourceAccountID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceAccountName(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.QuotaResetSourceResetAt(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceResetAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaResetSourceResetAtCleared() {
+		_spec.ClearField(group.FieldQuotaResetSourceResetAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaResetIncludeMonthly(); ok {
+		_spec.SetField(group.FieldQuotaResetIncludeMonthly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.QuotaResetConfigVersion(); ok {
+		_spec.SetField(group.FieldQuotaResetConfigVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaResetConfigVersion(); ok {
+		_spec.AddField(group.FieldQuotaResetConfigVersion, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)

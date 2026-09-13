@@ -213,6 +213,15 @@ func ProvideOpenAIQuotaAutoResetService(
 	return service
 }
 
+func ProvideOpenAIGroupQuotaFollowResetService(
+	repo OpenAIGroupQuotaFollowResetRepository,
+	billingCache *BillingCacheService,
+) *OpenAIGroupQuotaFollowResetService {
+	svc := NewOpenAIGroupQuotaFollowResetService(repo, billingCache)
+	svc.Start()
+	return svc
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -867,6 +876,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,
+	ProvideOpenAIGroupQuotaFollowResetService,
 	ProvideGrokQuotaService,
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
