@@ -22104,8 +22104,17 @@ type GroupMutation struct {
 	addweekly_limit_usd                     *float64
 	monthly_limit_usd                       *float64
 	addmonthly_limit_usd                    *float64
+	five_hour_limit_usd                     *float64
+	addfive_hour_limit_usd                  *float64
 	default_validity_days                   *int
 	adddefault_validity_days                *int
+	quota_reset_source_account_id           *int64
+	addquota_reset_source_account_id        *int64
+	quota_reset_source_account_name         *string
+	quota_reset_source_reset_at             *time.Time
+	quota_reset_include_monthly             *bool
+	quota_reset_config_version              *int64
+	addquota_reset_config_version           *int64
 	allow_image_generation                  *bool
 	allow_batch_image_generation            *bool
 	image_rate_independent                  *bool
@@ -23128,6 +23137,76 @@ func (m *GroupMutation) ResetMonthlyLimitUsd() {
 	delete(m.clearedFields, group.FieldMonthlyLimitUsd)
 }
 
+// SetFiveHourLimitUsd sets the "five_hour_limit_usd" field.
+func (m *GroupMutation) SetFiveHourLimitUsd(f float64) {
+	m.five_hour_limit_usd = &f
+	m.addfive_hour_limit_usd = nil
+}
+
+// FiveHourLimitUsd returns the value of the "five_hour_limit_usd" field in the mutation.
+func (m *GroupMutation) FiveHourLimitUsd() (r float64, exists bool) {
+	v := m.five_hour_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFiveHourLimitUsd returns the old "five_hour_limit_usd" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldFiveHourLimitUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFiveHourLimitUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFiveHourLimitUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFiveHourLimitUsd: %w", err)
+	}
+	return oldValue.FiveHourLimitUsd, nil
+}
+
+// AddFiveHourLimitUsd adds f to the "five_hour_limit_usd" field.
+func (m *GroupMutation) AddFiveHourLimitUsd(f float64) {
+	if m.addfive_hour_limit_usd != nil {
+		*m.addfive_hour_limit_usd += f
+	} else {
+		m.addfive_hour_limit_usd = &f
+	}
+}
+
+// AddedFiveHourLimitUsd returns the value that was added to the "five_hour_limit_usd" field in this mutation.
+func (m *GroupMutation) AddedFiveHourLimitUsd() (r float64, exists bool) {
+	v := m.addfive_hour_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearFiveHourLimitUsd clears the value of the "five_hour_limit_usd" field.
+func (m *GroupMutation) ClearFiveHourLimitUsd() {
+	m.five_hour_limit_usd = nil
+	m.addfive_hour_limit_usd = nil
+	m.clearedFields[group.FieldFiveHourLimitUsd] = struct{}{}
+}
+
+// FiveHourLimitUsdCleared returns if the "five_hour_limit_usd" field was cleared in this mutation.
+func (m *GroupMutation) FiveHourLimitUsdCleared() bool {
+	_, ok := m.clearedFields[group.FieldFiveHourLimitUsd]
+	return ok
+}
+
+// ResetFiveHourLimitUsd resets all changes to the "five_hour_limit_usd" field.
+func (m *GroupMutation) ResetFiveHourLimitUsd() {
+	m.five_hour_limit_usd = nil
+	m.addfive_hour_limit_usd = nil
+	delete(m.clearedFields, group.FieldFiveHourLimitUsd)
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (m *GroupMutation) SetDefaultValidityDays(i int) {
 	m.default_validity_days = &i
@@ -23182,6 +23261,253 @@ func (m *GroupMutation) AddedDefaultValidityDays() (r int, exists bool) {
 func (m *GroupMutation) ResetDefaultValidityDays() {
 	m.default_validity_days = nil
 	m.adddefault_validity_days = nil
+}
+
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (m *GroupMutation) SetQuotaResetSourceAccountID(i int64) {
+	m.quota_reset_source_account_id = &i
+	m.addquota_reset_source_account_id = nil
+}
+
+// QuotaResetSourceAccountID returns the value of the "quota_reset_source_account_id" field in the mutation.
+func (m *GroupMutation) QuotaResetSourceAccountID() (r int64, exists bool) {
+	v := m.quota_reset_source_account_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaResetSourceAccountID returns the old "quota_reset_source_account_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldQuotaResetSourceAccountID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaResetSourceAccountID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaResetSourceAccountID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaResetSourceAccountID: %w", err)
+	}
+	return oldValue.QuotaResetSourceAccountID, nil
+}
+
+// AddQuotaResetSourceAccountID adds i to the "quota_reset_source_account_id" field.
+func (m *GroupMutation) AddQuotaResetSourceAccountID(i int64) {
+	if m.addquota_reset_source_account_id != nil {
+		*m.addquota_reset_source_account_id += i
+	} else {
+		m.addquota_reset_source_account_id = &i
+	}
+}
+
+// AddedQuotaResetSourceAccountID returns the value that was added to the "quota_reset_source_account_id" field in this mutation.
+func (m *GroupMutation) AddedQuotaResetSourceAccountID() (r int64, exists bool) {
+	v := m.addquota_reset_source_account_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (m *GroupMutation) ClearQuotaResetSourceAccountID() {
+	m.quota_reset_source_account_id = nil
+	m.addquota_reset_source_account_id = nil
+	m.clearedFields[group.FieldQuotaResetSourceAccountID] = struct{}{}
+}
+
+// QuotaResetSourceAccountIDCleared returns if the "quota_reset_source_account_id" field was cleared in this mutation.
+func (m *GroupMutation) QuotaResetSourceAccountIDCleared() bool {
+	_, ok := m.clearedFields[group.FieldQuotaResetSourceAccountID]
+	return ok
+}
+
+// ResetQuotaResetSourceAccountID resets all changes to the "quota_reset_source_account_id" field.
+func (m *GroupMutation) ResetQuotaResetSourceAccountID() {
+	m.quota_reset_source_account_id = nil
+	m.addquota_reset_source_account_id = nil
+	delete(m.clearedFields, group.FieldQuotaResetSourceAccountID)
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (m *GroupMutation) SetQuotaResetSourceAccountName(s string) {
+	m.quota_reset_source_account_name = &s
+}
+
+// QuotaResetSourceAccountName returns the value of the "quota_reset_source_account_name" field in the mutation.
+func (m *GroupMutation) QuotaResetSourceAccountName() (r string, exists bool) {
+	v := m.quota_reset_source_account_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaResetSourceAccountName returns the old "quota_reset_source_account_name" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldQuotaResetSourceAccountName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaResetSourceAccountName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaResetSourceAccountName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaResetSourceAccountName: %w", err)
+	}
+	return oldValue.QuotaResetSourceAccountName, nil
+}
+
+// ResetQuotaResetSourceAccountName resets all changes to the "quota_reset_source_account_name" field.
+func (m *GroupMutation) ResetQuotaResetSourceAccountName() {
+	m.quota_reset_source_account_name = nil
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (m *GroupMutation) SetQuotaResetSourceResetAt(t time.Time) {
+	m.quota_reset_source_reset_at = &t
+}
+
+// QuotaResetSourceResetAt returns the value of the "quota_reset_source_reset_at" field in the mutation.
+func (m *GroupMutation) QuotaResetSourceResetAt() (r time.Time, exists bool) {
+	v := m.quota_reset_source_reset_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaResetSourceResetAt returns the old "quota_reset_source_reset_at" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldQuotaResetSourceResetAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaResetSourceResetAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaResetSourceResetAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaResetSourceResetAt: %w", err)
+	}
+	return oldValue.QuotaResetSourceResetAt, nil
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (m *GroupMutation) ClearQuotaResetSourceResetAt() {
+	m.quota_reset_source_reset_at = nil
+	m.clearedFields[group.FieldQuotaResetSourceResetAt] = struct{}{}
+}
+
+// QuotaResetSourceResetAtCleared returns if the "quota_reset_source_reset_at" field was cleared in this mutation.
+func (m *GroupMutation) QuotaResetSourceResetAtCleared() bool {
+	_, ok := m.clearedFields[group.FieldQuotaResetSourceResetAt]
+	return ok
+}
+
+// ResetQuotaResetSourceResetAt resets all changes to the "quota_reset_source_reset_at" field.
+func (m *GroupMutation) ResetQuotaResetSourceResetAt() {
+	m.quota_reset_source_reset_at = nil
+	delete(m.clearedFields, group.FieldQuotaResetSourceResetAt)
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (m *GroupMutation) SetQuotaResetIncludeMonthly(b bool) {
+	m.quota_reset_include_monthly = &b
+}
+
+// QuotaResetIncludeMonthly returns the value of the "quota_reset_include_monthly" field in the mutation.
+func (m *GroupMutation) QuotaResetIncludeMonthly() (r bool, exists bool) {
+	v := m.quota_reset_include_monthly
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaResetIncludeMonthly returns the old "quota_reset_include_monthly" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldQuotaResetIncludeMonthly(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaResetIncludeMonthly is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaResetIncludeMonthly requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaResetIncludeMonthly: %w", err)
+	}
+	return oldValue.QuotaResetIncludeMonthly, nil
+}
+
+// ResetQuotaResetIncludeMonthly resets all changes to the "quota_reset_include_monthly" field.
+func (m *GroupMutation) ResetQuotaResetIncludeMonthly() {
+	m.quota_reset_include_monthly = nil
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (m *GroupMutation) SetQuotaResetConfigVersion(i int64) {
+	m.quota_reset_config_version = &i
+	m.addquota_reset_config_version = nil
+}
+
+// QuotaResetConfigVersion returns the value of the "quota_reset_config_version" field in the mutation.
+func (m *GroupMutation) QuotaResetConfigVersion() (r int64, exists bool) {
+	v := m.quota_reset_config_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaResetConfigVersion returns the old "quota_reset_config_version" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldQuotaResetConfigVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaResetConfigVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaResetConfigVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaResetConfigVersion: %w", err)
+	}
+	return oldValue.QuotaResetConfigVersion, nil
+}
+
+// AddQuotaResetConfigVersion adds i to the "quota_reset_config_version" field.
+func (m *GroupMutation) AddQuotaResetConfigVersion(i int64) {
+	if m.addquota_reset_config_version != nil {
+		*m.addquota_reset_config_version += i
+	} else {
+		m.addquota_reset_config_version = &i
+	}
+}
+
+// AddedQuotaResetConfigVersion returns the value that was added to the "quota_reset_config_version" field in this mutation.
+func (m *GroupMutation) AddedQuotaResetConfigVersion() (r int64, exists bool) {
+	v := m.addquota_reset_config_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetQuotaResetConfigVersion resets all changes to the "quota_reset_config_version" field.
+func (m *GroupMutation) ResetQuotaResetConfigVersion() {
+	m.quota_reset_config_version = nil
+	m.addquota_reset_config_version = nil
 }
 
 // SetAllowImageGeneration sets the "allow_image_generation" field.
@@ -25921,7 +26247,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 66)
+	fields := make([]string, 0, 72)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25976,8 +26302,26 @@ func (m *GroupMutation) Fields() []string {
 	if m.monthly_limit_usd != nil {
 		fields = append(fields, group.FieldMonthlyLimitUsd)
 	}
+	if m.five_hour_limit_usd != nil {
+		fields = append(fields, group.FieldFiveHourLimitUsd)
+	}
 	if m.default_validity_days != nil {
 		fields = append(fields, group.FieldDefaultValidityDays)
+	}
+	if m.quota_reset_source_account_id != nil {
+		fields = append(fields, group.FieldQuotaResetSourceAccountID)
+	}
+	if m.quota_reset_source_account_name != nil {
+		fields = append(fields, group.FieldQuotaResetSourceAccountName)
+	}
+	if m.quota_reset_source_reset_at != nil {
+		fields = append(fields, group.FieldQuotaResetSourceResetAt)
+	}
+	if m.quota_reset_include_monthly != nil {
+		fields = append(fields, group.FieldQuotaResetIncludeMonthly)
+	}
+	if m.quota_reset_config_version != nil {
+		fields = append(fields, group.FieldQuotaResetConfigVersion)
 	}
 	if m.allow_image_generation != nil {
 		fields = append(fields, group.FieldAllowImageGeneration)
@@ -26164,8 +26508,20 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.WeeklyLimitUsd()
 	case group.FieldMonthlyLimitUsd:
 		return m.MonthlyLimitUsd()
+	case group.FieldFiveHourLimitUsd:
+		return m.FiveHourLimitUsd()
 	case group.FieldDefaultValidityDays:
 		return m.DefaultValidityDays()
+	case group.FieldQuotaResetSourceAccountID:
+		return m.QuotaResetSourceAccountID()
+	case group.FieldQuotaResetSourceAccountName:
+		return m.QuotaResetSourceAccountName()
+	case group.FieldQuotaResetSourceResetAt:
+		return m.QuotaResetSourceResetAt()
+	case group.FieldQuotaResetIncludeMonthly:
+		return m.QuotaResetIncludeMonthly()
+	case group.FieldQuotaResetConfigVersion:
+		return m.QuotaResetConfigVersion()
 	case group.FieldAllowImageGeneration:
 		return m.AllowImageGeneration()
 	case group.FieldAllowBatchImageGeneration:
@@ -26305,8 +26661,20 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldWeeklyLimitUsd(ctx)
 	case group.FieldMonthlyLimitUsd:
 		return m.OldMonthlyLimitUsd(ctx)
+	case group.FieldFiveHourLimitUsd:
+		return m.OldFiveHourLimitUsd(ctx)
 	case group.FieldDefaultValidityDays:
 		return m.OldDefaultValidityDays(ctx)
+	case group.FieldQuotaResetSourceAccountID:
+		return m.OldQuotaResetSourceAccountID(ctx)
+	case group.FieldQuotaResetSourceAccountName:
+		return m.OldQuotaResetSourceAccountName(ctx)
+	case group.FieldQuotaResetSourceResetAt:
+		return m.OldQuotaResetSourceResetAt(ctx)
+	case group.FieldQuotaResetIncludeMonthly:
+		return m.OldQuotaResetIncludeMonthly(ctx)
+	case group.FieldQuotaResetConfigVersion:
+		return m.OldQuotaResetConfigVersion(ctx)
 	case group.FieldAllowImageGeneration:
 		return m.OldAllowImageGeneration(ctx)
 	case group.FieldAllowBatchImageGeneration:
@@ -26536,12 +26904,54 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetMonthlyLimitUsd(v)
 		return nil
+	case group.FieldFiveHourLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFiveHourLimitUsd(v)
+		return nil
 	case group.FieldDefaultValidityDays:
 		v, ok := value.(int)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDefaultValidityDays(v)
+		return nil
+	case group.FieldQuotaResetSourceAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaResetSourceAccountID(v)
+		return nil
+	case group.FieldQuotaResetSourceAccountName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaResetSourceAccountName(v)
+		return nil
+	case group.FieldQuotaResetSourceResetAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaResetSourceResetAt(v)
+		return nil
+	case group.FieldQuotaResetIncludeMonthly:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaResetIncludeMonthly(v)
+		return nil
+	case group.FieldQuotaResetConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaResetConfigVersion(v)
 		return nil
 	case group.FieldAllowImageGeneration:
 		v, ok := value.(bool)
@@ -26895,8 +27305,17 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addmonthly_limit_usd != nil {
 		fields = append(fields, group.FieldMonthlyLimitUsd)
 	}
+	if m.addfive_hour_limit_usd != nil {
+		fields = append(fields, group.FieldFiveHourLimitUsd)
+	}
 	if m.adddefault_validity_days != nil {
 		fields = append(fields, group.FieldDefaultValidityDays)
+	}
+	if m.addquota_reset_source_account_id != nil {
+		fields = append(fields, group.FieldQuotaResetSourceAccountID)
+	}
+	if m.addquota_reset_config_version != nil {
+		fields = append(fields, group.FieldQuotaResetConfigVersion)
 	}
 	if m.addimage_rate_multiplier != nil {
 		fields = append(fields, group.FieldImageRateMultiplier)
@@ -26979,8 +27398,14 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedWeeklyLimitUsd()
 	case group.FieldMonthlyLimitUsd:
 		return m.AddedMonthlyLimitUsd()
+	case group.FieldFiveHourLimitUsd:
+		return m.AddedFiveHourLimitUsd()
 	case group.FieldDefaultValidityDays:
 		return m.AddedDefaultValidityDays()
+	case group.FieldQuotaResetSourceAccountID:
+		return m.AddedQuotaResetSourceAccountID()
+	case group.FieldQuotaResetConfigVersion:
+		return m.AddedQuotaResetConfigVersion()
 	case group.FieldImageRateMultiplier:
 		return m.AddedImageRateMultiplier()
 	case group.FieldImagePrice1k:
@@ -27067,12 +27492,33 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddMonthlyLimitUsd(v)
 		return nil
+	case group.FieldFiveHourLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddFiveHourLimitUsd(v)
+		return nil
 	case group.FieldDefaultValidityDays:
 		v, ok := value.(int)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddDefaultValidityDays(v)
+		return nil
+	case group.FieldQuotaResetSourceAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddQuotaResetSourceAccountID(v)
+		return nil
+	case group.FieldQuotaResetConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddQuotaResetConfigVersion(v)
 		return nil
 	case group.FieldImageRateMultiplier:
 		v, ok := value.(float64)
@@ -27247,6 +27693,15 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldMonthlyLimitUsd) {
 		fields = append(fields, group.FieldMonthlyLimitUsd)
 	}
+	if m.FieldCleared(group.FieldFiveHourLimitUsd) {
+		fields = append(fields, group.FieldFiveHourLimitUsd)
+	}
+	if m.FieldCleared(group.FieldQuotaResetSourceAccountID) {
+		fields = append(fields, group.FieldQuotaResetSourceAccountID)
+	}
+	if m.FieldCleared(group.FieldQuotaResetSourceResetAt) {
+		fields = append(fields, group.FieldQuotaResetSourceResetAt)
+	}
 	if m.FieldCleared(group.FieldImagePrice1k) {
 		fields = append(fields, group.FieldImagePrice1k)
 	}
@@ -27326,6 +27781,15 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldMonthlyLimitUsd:
 		m.ClearMonthlyLimitUsd()
+		return nil
+	case group.FieldFiveHourLimitUsd:
+		m.ClearFiveHourLimitUsd()
+		return nil
+	case group.FieldQuotaResetSourceAccountID:
+		m.ClearQuotaResetSourceAccountID()
+		return nil
+	case group.FieldQuotaResetSourceResetAt:
+		m.ClearQuotaResetSourceResetAt()
 		return nil
 	case group.FieldImagePrice1k:
 		m.ClearImagePrice1k()
@@ -27437,8 +27901,26 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldMonthlyLimitUsd:
 		m.ResetMonthlyLimitUsd()
 		return nil
+	case group.FieldFiveHourLimitUsd:
+		m.ResetFiveHourLimitUsd()
+		return nil
 	case group.FieldDefaultValidityDays:
 		m.ResetDefaultValidityDays()
+		return nil
+	case group.FieldQuotaResetSourceAccountID:
+		m.ResetQuotaResetSourceAccountID()
+		return nil
+	case group.FieldQuotaResetSourceAccountName:
+		m.ResetQuotaResetSourceAccountName()
+		return nil
+	case group.FieldQuotaResetSourceResetAt:
+		m.ResetQuotaResetSourceResetAt()
+		return nil
+	case group.FieldQuotaResetIncludeMonthly:
+		m.ResetQuotaResetIncludeMonthly()
+		return nil
+	case group.FieldQuotaResetConfigVersion:
+		m.ResetQuotaResetConfigVersion()
 		return nil
 	case group.FieldAllowImageGeneration:
 		m.ResetAllowImageGeneration()
@@ -55365,39 +55847,44 @@ func (m *UserPlatformQuotaMutation) ResetEdge(name string) error {
 // UserSubscriptionMutation represents an operation that mutates the UserSubscription nodes in the graph.
 type UserSubscriptionMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *int64
-	created_at              *time.Time
-	updated_at              *time.Time
-	deleted_at              *time.Time
-	starts_at               *time.Time
-	expires_at              *time.Time
-	status                  *string
-	daily_window_start      *time.Time
-	weekly_window_start     *time.Time
-	monthly_window_start    *time.Time
-	daily_usage_usd         *float64
-	adddaily_usage_usd      *float64
-	weekly_usage_usd        *float64
-	addweekly_usage_usd     *float64
-	monthly_usage_usd       *float64
-	addmonthly_usage_usd    *float64
-	assigned_at             *time.Time
-	notes                   *string
-	clearedFields           map[string]struct{}
-	user                    *int64
-	cleareduser             bool
-	group                   *int64
-	clearedgroup            bool
-	assigned_by_user        *int64
-	clearedassigned_by_user bool
-	usage_logs              map[int64]struct{}
-	removedusage_logs       map[int64]struct{}
-	clearedusage_logs       bool
-	done                    bool
-	oldValue                func(context.Context) (*UserSubscription, error)
-	predicates              []predicate.UserSubscription
+	op                             Op
+	typ                            string
+	id                             *int64
+	created_at                     *time.Time
+	updated_at                     *time.Time
+	deleted_at                     *time.Time
+	starts_at                      *time.Time
+	expires_at                     *time.Time
+	status                         *string
+	daily_window_start             *time.Time
+	weekly_window_start            *time.Time
+	monthly_window_start           *time.Time
+	five_hour_window_start         *time.Time
+	daily_usage_usd                *float64
+	adddaily_usage_usd             *float64
+	weekly_usage_usd               *float64
+	addweekly_usage_usd            *float64
+	monthly_usage_usd              *float64
+	addmonthly_usage_usd           *float64
+	five_hour_usage_usd            *float64
+	addfive_hour_usage_usd         *float64
+	quota_follow_reset_event_id    *int64
+	addquota_follow_reset_event_id *int64
+	assigned_at                    *time.Time
+	notes                          *string
+	clearedFields                  map[string]struct{}
+	user                           *int64
+	cleareduser                    bool
+	group                          *int64
+	clearedgroup                   bool
+	assigned_by_user               *int64
+	clearedassigned_by_user        bool
+	usage_logs                     map[int64]struct{}
+	removedusage_logs              map[int64]struct{}
+	clearedusage_logs              bool
+	done                           bool
+	oldValue                       func(context.Context) (*UserSubscription, error)
+	predicates                     []predicate.UserSubscription
 }
 
 var _ ent.Mutation = (*UserSubscriptionMutation)(nil)
@@ -55946,6 +56433,55 @@ func (m *UserSubscriptionMutation) ResetMonthlyWindowStart() {
 	delete(m.clearedFields, usersubscription.FieldMonthlyWindowStart)
 }
 
+// SetFiveHourWindowStart sets the "five_hour_window_start" field.
+func (m *UserSubscriptionMutation) SetFiveHourWindowStart(t time.Time) {
+	m.five_hour_window_start = &t
+}
+
+// FiveHourWindowStart returns the value of the "five_hour_window_start" field in the mutation.
+func (m *UserSubscriptionMutation) FiveHourWindowStart() (r time.Time, exists bool) {
+	v := m.five_hour_window_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFiveHourWindowStart returns the old "five_hour_window_start" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldFiveHourWindowStart(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFiveHourWindowStart is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFiveHourWindowStart requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFiveHourWindowStart: %w", err)
+	}
+	return oldValue.FiveHourWindowStart, nil
+}
+
+// ClearFiveHourWindowStart clears the value of the "five_hour_window_start" field.
+func (m *UserSubscriptionMutation) ClearFiveHourWindowStart() {
+	m.five_hour_window_start = nil
+	m.clearedFields[usersubscription.FieldFiveHourWindowStart] = struct{}{}
+}
+
+// FiveHourWindowStartCleared returns if the "five_hour_window_start" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) FiveHourWindowStartCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldFiveHourWindowStart]
+	return ok
+}
+
+// ResetFiveHourWindowStart resets all changes to the "five_hour_window_start" field.
+func (m *UserSubscriptionMutation) ResetFiveHourWindowStart() {
+	m.five_hour_window_start = nil
+	delete(m.clearedFields, usersubscription.FieldFiveHourWindowStart)
+}
+
 // SetDailyUsageUsd sets the "daily_usage_usd" field.
 func (m *UserSubscriptionMutation) SetDailyUsageUsd(f float64) {
 	m.daily_usage_usd = &f
@@ -56112,6 +56648,118 @@ func (m *UserSubscriptionMutation) AddedMonthlyUsageUsd() (r float64, exists boo
 func (m *UserSubscriptionMutation) ResetMonthlyUsageUsd() {
 	m.monthly_usage_usd = nil
 	m.addmonthly_usage_usd = nil
+}
+
+// SetFiveHourUsageUsd sets the "five_hour_usage_usd" field.
+func (m *UserSubscriptionMutation) SetFiveHourUsageUsd(f float64) {
+	m.five_hour_usage_usd = &f
+	m.addfive_hour_usage_usd = nil
+}
+
+// FiveHourUsageUsd returns the value of the "five_hour_usage_usd" field in the mutation.
+func (m *UserSubscriptionMutation) FiveHourUsageUsd() (r float64, exists bool) {
+	v := m.five_hour_usage_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFiveHourUsageUsd returns the old "five_hour_usage_usd" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldFiveHourUsageUsd(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFiveHourUsageUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFiveHourUsageUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFiveHourUsageUsd: %w", err)
+	}
+	return oldValue.FiveHourUsageUsd, nil
+}
+
+// AddFiveHourUsageUsd adds f to the "five_hour_usage_usd" field.
+func (m *UserSubscriptionMutation) AddFiveHourUsageUsd(f float64) {
+	if m.addfive_hour_usage_usd != nil {
+		*m.addfive_hour_usage_usd += f
+	} else {
+		m.addfive_hour_usage_usd = &f
+	}
+}
+
+// AddedFiveHourUsageUsd returns the value that was added to the "five_hour_usage_usd" field in this mutation.
+func (m *UserSubscriptionMutation) AddedFiveHourUsageUsd() (r float64, exists bool) {
+	v := m.addfive_hour_usage_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetFiveHourUsageUsd resets all changes to the "five_hour_usage_usd" field.
+func (m *UserSubscriptionMutation) ResetFiveHourUsageUsd() {
+	m.five_hour_usage_usd = nil
+	m.addfive_hour_usage_usd = nil
+}
+
+// SetQuotaFollowResetEventID sets the "quota_follow_reset_event_id" field.
+func (m *UserSubscriptionMutation) SetQuotaFollowResetEventID(i int64) {
+	m.quota_follow_reset_event_id = &i
+	m.addquota_follow_reset_event_id = nil
+}
+
+// QuotaFollowResetEventID returns the value of the "quota_follow_reset_event_id" field in the mutation.
+func (m *UserSubscriptionMutation) QuotaFollowResetEventID() (r int64, exists bool) {
+	v := m.quota_follow_reset_event_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaFollowResetEventID returns the old "quota_follow_reset_event_id" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldQuotaFollowResetEventID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaFollowResetEventID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaFollowResetEventID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaFollowResetEventID: %w", err)
+	}
+	return oldValue.QuotaFollowResetEventID, nil
+}
+
+// AddQuotaFollowResetEventID adds i to the "quota_follow_reset_event_id" field.
+func (m *UserSubscriptionMutation) AddQuotaFollowResetEventID(i int64) {
+	if m.addquota_follow_reset_event_id != nil {
+		*m.addquota_follow_reset_event_id += i
+	} else {
+		m.addquota_follow_reset_event_id = &i
+	}
+}
+
+// AddedQuotaFollowResetEventID returns the value that was added to the "quota_follow_reset_event_id" field in this mutation.
+func (m *UserSubscriptionMutation) AddedQuotaFollowResetEventID() (r int64, exists bool) {
+	v := m.addquota_follow_reset_event_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetQuotaFollowResetEventID resets all changes to the "quota_follow_reset_event_id" field.
+func (m *UserSubscriptionMutation) ResetQuotaFollowResetEventID() {
+	m.quota_follow_reset_event_id = nil
+	m.addquota_follow_reset_event_id = nil
 }
 
 // SetAssignedBy sets the "assigned_by" field.
@@ -56430,7 +57078,7 @@ func (m *UserSubscriptionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserSubscriptionMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 20)
 	if m.created_at != nil {
 		fields = append(fields, usersubscription.FieldCreatedAt)
 	}
@@ -56464,6 +57112,9 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	if m.monthly_window_start != nil {
 		fields = append(fields, usersubscription.FieldMonthlyWindowStart)
 	}
+	if m.five_hour_window_start != nil {
+		fields = append(fields, usersubscription.FieldFiveHourWindowStart)
+	}
 	if m.daily_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldDailyUsageUsd)
 	}
@@ -56472,6 +57123,12 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	}
 	if m.monthly_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldMonthlyUsageUsd)
+	}
+	if m.five_hour_usage_usd != nil {
+		fields = append(fields, usersubscription.FieldFiveHourUsageUsd)
+	}
+	if m.quota_follow_reset_event_id != nil {
+		fields = append(fields, usersubscription.FieldQuotaFollowResetEventID)
 	}
 	if m.assigned_by_user != nil {
 		fields = append(fields, usersubscription.FieldAssignedBy)
@@ -56512,12 +57169,18 @@ func (m *UserSubscriptionMutation) Field(name string) (ent.Value, bool) {
 		return m.WeeklyWindowStart()
 	case usersubscription.FieldMonthlyWindowStart:
 		return m.MonthlyWindowStart()
+	case usersubscription.FieldFiveHourWindowStart:
+		return m.FiveHourWindowStart()
 	case usersubscription.FieldDailyUsageUsd:
 		return m.DailyUsageUsd()
 	case usersubscription.FieldWeeklyUsageUsd:
 		return m.WeeklyUsageUsd()
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.MonthlyUsageUsd()
+	case usersubscription.FieldFiveHourUsageUsd:
+		return m.FiveHourUsageUsd()
+	case usersubscription.FieldQuotaFollowResetEventID:
+		return m.QuotaFollowResetEventID()
 	case usersubscription.FieldAssignedBy:
 		return m.AssignedBy()
 	case usersubscription.FieldAssignedAt:
@@ -56555,12 +57218,18 @@ func (m *UserSubscriptionMutation) OldField(ctx context.Context, name string) (e
 		return m.OldWeeklyWindowStart(ctx)
 	case usersubscription.FieldMonthlyWindowStart:
 		return m.OldMonthlyWindowStart(ctx)
+	case usersubscription.FieldFiveHourWindowStart:
+		return m.OldFiveHourWindowStart(ctx)
 	case usersubscription.FieldDailyUsageUsd:
 		return m.OldDailyUsageUsd(ctx)
 	case usersubscription.FieldWeeklyUsageUsd:
 		return m.OldWeeklyUsageUsd(ctx)
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.OldMonthlyUsageUsd(ctx)
+	case usersubscription.FieldFiveHourUsageUsd:
+		return m.OldFiveHourUsageUsd(ctx)
+	case usersubscription.FieldQuotaFollowResetEventID:
+		return m.OldQuotaFollowResetEventID(ctx)
 	case usersubscription.FieldAssignedBy:
 		return m.OldAssignedBy(ctx)
 	case usersubscription.FieldAssignedAt:
@@ -56653,6 +57322,13 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetMonthlyWindowStart(v)
 		return nil
+	case usersubscription.FieldFiveHourWindowStart:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFiveHourWindowStart(v)
+		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		v, ok := value.(float64)
 		if !ok {
@@ -56673,6 +57349,20 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetMonthlyUsageUsd(v)
+		return nil
+	case usersubscription.FieldFiveHourUsageUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFiveHourUsageUsd(v)
+		return nil
+	case usersubscription.FieldQuotaFollowResetEventID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaFollowResetEventID(v)
 		return nil
 	case usersubscription.FieldAssignedBy:
 		v, ok := value.(int64)
@@ -56712,6 +57402,12 @@ func (m *UserSubscriptionMutation) AddedFields() []string {
 	if m.addmonthly_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldMonthlyUsageUsd)
 	}
+	if m.addfive_hour_usage_usd != nil {
+		fields = append(fields, usersubscription.FieldFiveHourUsageUsd)
+	}
+	if m.addquota_follow_reset_event_id != nil {
+		fields = append(fields, usersubscription.FieldQuotaFollowResetEventID)
+	}
 	return fields
 }
 
@@ -56726,6 +57422,10 @@ func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedWeeklyUsageUsd()
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.AddedMonthlyUsageUsd()
+	case usersubscription.FieldFiveHourUsageUsd:
+		return m.AddedFiveHourUsageUsd()
+	case usersubscription.FieldQuotaFollowResetEventID:
+		return m.AddedQuotaFollowResetEventID()
 	}
 	return nil, false
 }
@@ -56756,6 +57456,20 @@ func (m *UserSubscriptionMutation) AddField(name string, value ent.Value) error 
 		}
 		m.AddMonthlyUsageUsd(v)
 		return nil
+	case usersubscription.FieldFiveHourUsageUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddFiveHourUsageUsd(v)
+		return nil
+	case usersubscription.FieldQuotaFollowResetEventID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddQuotaFollowResetEventID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown UserSubscription numeric field %s", name)
 }
@@ -56775,6 +57489,9 @@ func (m *UserSubscriptionMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(usersubscription.FieldMonthlyWindowStart) {
 		fields = append(fields, usersubscription.FieldMonthlyWindowStart)
+	}
+	if m.FieldCleared(usersubscription.FieldFiveHourWindowStart) {
+		fields = append(fields, usersubscription.FieldFiveHourWindowStart)
 	}
 	if m.FieldCleared(usersubscription.FieldAssignedBy) {
 		fields = append(fields, usersubscription.FieldAssignedBy)
@@ -56807,6 +57524,9 @@ func (m *UserSubscriptionMutation) ClearField(name string) error {
 		return nil
 	case usersubscription.FieldMonthlyWindowStart:
 		m.ClearMonthlyWindowStart()
+		return nil
+	case usersubscription.FieldFiveHourWindowStart:
+		m.ClearFiveHourWindowStart()
 		return nil
 	case usersubscription.FieldAssignedBy:
 		m.ClearAssignedBy()
@@ -56855,6 +57575,9 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 	case usersubscription.FieldMonthlyWindowStart:
 		m.ResetMonthlyWindowStart()
 		return nil
+	case usersubscription.FieldFiveHourWindowStart:
+		m.ResetFiveHourWindowStart()
+		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		m.ResetDailyUsageUsd()
 		return nil
@@ -56863,6 +57586,12 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 		return nil
 	case usersubscription.FieldMonthlyUsageUsd:
 		m.ResetMonthlyUsageUsd()
+		return nil
+	case usersubscription.FieldFiveHourUsageUsd:
+		m.ResetFiveHourUsageUsd()
+		return nil
+	case usersubscription.FieldQuotaFollowResetEventID:
+		m.ResetQuotaFollowResetEventID()
 		return nil
 	case usersubscription.FieldAssignedBy:
 		m.ResetAssignedBy()

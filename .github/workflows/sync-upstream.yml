@@ -1,15 +1,9 @@
 name: Sync upstream into klno
 
-# 上游 Wei-Shaw/sub2api 发新版标签后，把 klno 分支 rebase 到新标签、跑定向测试、
-# 打 <上游标签>-klno.N 标签并触发 release.yml 出包；同时检查 codex-rs 身份相关源码是否变动。
-# 冲突、测试失败、codex-rs 漂移都只让 run 失败（GitHub 邮件通知），不推送任何东西；fork 未开 issues。
-# 所以漂移检查必须排在推分支/推标签/触发 release 之前——排在后面等于包已经发出去才报错。
-# 每次运行还会把默认分支 main 重建成 upstream/main + 本文件：GitHub 的定时 workflow 只从默认
-# 分支触发，main 只是 cron 的宿主，没人同步它就会一直落后（仓库首页那条 "N commits behind"）。
+# Wei-Shaw 更新先在本地 rebase klno、测试及检查身份漂移，然后创建审查 PR。
+# 不再自动打产品标签，也不再重建 main；发布由统一 Release 流程处理。
 
 on:
-  schedule:
-    - cron: '17 3 * * *' # UTC，每天一次
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -18,8 +12,11 @@ on:
         type: string
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
+
+concurrency:
+  group: sync-wei-release
+  cancel-in-progress: false
 
 env:
   UPSTREAM_REPO: Wei-Shaw/sub2api
@@ -36,26 +33,39 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    outputs:
+      latest: ${{ steps.up.outputs.latest }}
+      changed: ${{ steps.bundle.outputs.changed }}
     steps:
       - name: Checkout fork branch
         uses: actions/checkout@v6
         with:
           ref: ${{ env.FORK_BRANCH }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Resolve upstream tag
         id: up
+        env:
+          UPSTREAM_TAG_INPUT: ${{ inputs.upstream_tag }}
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch --tags --force upstream
-          if [ -n "${{ inputs.upstream_tag }}" ]; then
-            latest="${{ inputs.upstream_tag }}"
+          if [ -n "$UPSTREAM_TAG_INPUT" ]; then
+            if [[ ! "$UPSTREAM_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::unexpected upstream tag: $UPSTREAM_TAG_INPUT"
+              exit 1
+            fi
+            latest="$UPSTREAM_TAG_INPUT"
           else
             latest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
           fi
-          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${FORK_BRANCH}" | sed -E 's/-klno\.[0-9]+$//')
+          if ! git ls-remote --exit-code --tags upstream "refs/tags/$latest" >/dev/null 2>&1; then
+            echo "::error::upstream tag does not exist: $latest"
+            exit 1
+          fi
+          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${FORK_BRANCH}" | sed -E 's/-(klno|hao)\.[0-9]+$//')
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "upstream latest=$latest, klno base=$base"
@@ -63,11 +73,14 @@ jobs:
       - name: Rebase klno onto upstream tag
         id: rebase
         if: steps.up.outputs.latest != steps.up.outputs.base
+        env:
+          LATEST_TAG: ${{ steps.up.outputs.latest }}
+          BASE_TAG: ${{ steps.up.outputs.base }}
         run: |
           set -euo pipefail
           git config user.name "klno-sync-bot"
           git config user.email "klno-sync-bot@users.noreply.github.com"
-          if git rebase --onto "${{ steps.up.outputs.latest }}" "${{ steps.up.outputs.base }}" "${FORK_BRANCH}"; then
+          if git rebase --onto "$LATEST_TAG" "$BASE_TAG" "$FORK_BRANCH"; then
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
             git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
@@ -77,8 +90,11 @@ jobs:
 
       - name: Fail on conflict
         if: steps.rebase.outputs.conflict == 'true'
+        env:
+          LATEST_TAG: ${{ steps.up.outputs.latest }}
+          BASE_TAG: ${{ steps.up.outputs.base }}
         run: |
-          echo "::error title=sync-upstream conflict::rebase klno (${{ steps.up.outputs.base }}) onto ${{ steps.up.outputs.latest }} 冲突，需要人工处理，冲突文件见本步骤日志"
+          echo "::error title=sync-upstream conflict::rebase klno ($BASE_TAG) onto $LATEST_TAG 冲突，需要人工处理，冲突文件见本步骤日志"
           cat /tmp/conflicts.txt
           exit 1
 
@@ -95,7 +111,11 @@ jobs:
         run: |
           set -euo pipefail
           go build ./...
+          set +e
           go test ./internal/service -count=1 -run 'CodexFingerprintConvergence|CodexAccountIdentity|CodexFingerprint|OAuthPassthrough|BuildOpenAIWSHeaders|SetupTokenCompat|IngressSession' 2>&1 | grep -vE '"level":"(DEBUG|INFO|WARN)"' | tail -20
+          test_status=${PIPESTATUS[0]}
+          set -e
+          exit "$test_status"
 
       - name: Check codex-rs identity sources for drift
         run: |
@@ -111,40 +131,54 @@ jobs:
           fi
           echo "codex identity sources unchanged since ${CODEX_PINNED_COMMIT}"
 
-      - name: Push rebased branch and tag, trigger release
+      - name: Export the tested branch without write credentials
         if: steps.up.outputs.latest != steps.up.outputs.base
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: bundle
         run: |
-          set -euo pipefail
-          git push --force-with-lease origin "${FORK_BRANCH}"
-          n=1
-          while git ls-remote --exit-code --tags origin "refs/tags/${{ steps.up.outputs.latest }}-klno.${n}" >/dev/null 2>&1; do n=$((n+1)); done
-          tag="${{ steps.up.outputs.latest }}-klno.${n}"
-          git tag -a "$tag" -m "klno build on upstream ${{ steps.up.outputs.latest }}"
-          git push origin "$tag"
-          # GITHUB_TOKEN 推的 tag 不会触发 release.yml，改用 workflow_dispatch；必须显式 --repo，否则 gh 会从 upstream remote 解析成上游仓库（403）
-          gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "$tag" -f tag="$tag"
-          echo "released $tag"
+          git bundle create "$RUNNER_TEMP/upstream.bundle" HEAD
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        if: steps.bundle.outputs.changed == 'true'
+        with:
+          name: upstream-branch
+          path: ${{ runner.temp }}/upstream.bundle
+          retention-days: 1
 
-      - name: Resync default branch onto upstream
+  propose:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: upstream-branch
+          path: ${{ runner.temp }}
+      - name: Push reviewed update branch and create PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          LATEST_TAG: ${{ needs.sync.outputs.latest }}
         run: |
           set -euo pipefail
-          git fetch --force origin main
-          git fetch --force upstream main
-          behind=$(git rev-list --count origin/main..upstream/main)
-          if [ "$behind" -eq 0 ]; then
-            echo "default branch already level with upstream/main"
-            exit 0
+          [[ "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh auth setup-git
+          git fetch "$RUNNER_TEMP/upstream.bundle" HEAD
+          branch="sync/wei-release/$LATEST_TAG"
+          # main is the product branch; never reset it to upstream or force-push it.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Update branch already exists: $branch"
+          else
+            git push origin "FETCH_HEAD:refs/heads/$branch"
           fi
-          # main 只承担一个职责：给 cron 当宿主。重建成 upstream/main + klno 那份本文件，
-          # 不保留 release.yml 推来的 "chore: sync VERSION to *-klno.*"——那是 klno 的版本号，
-          # 留在镜像分支上只会每次跟上游的 VERSION 打架。
-          git config user.name "klno-sync-bot"
-          git config user.email "klno-sync-bot@users.noreply.github.com"
-          git checkout -B main upstream/main
-          git checkout "${FORK_BRANCH}" -- .github/workflows/sync-upstream.yml
-          git commit -q -m "ci: host sync-upstream workflow on the default branch" || true
-          test -f .github/workflows/sync-upstream.yml # 丢了这个文件 cron 就停了
-          git push --force-with-lease origin main
-          echo "default branch resynced onto upstream/main ($(git rev-parse --short upstream/main)), was $behind behind"
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state all --json number --jq 'length')
+          if [ "$existing" -eq 0 ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "ci(上游同步): 同步 Wei-Shaw $LATEST_TAG" \
+              --body "同步上游正式标签 $LATEST_TAG；定向测试与身份漂移检查已通过。合并由维护者审查，候选构建及正式发布交由 Release 自动化。"
+          fi
