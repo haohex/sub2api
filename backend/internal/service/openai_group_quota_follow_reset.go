@@ -35,8 +35,6 @@ type OpenAIGroupQuotaFollowResetService struct {
 	start        sync.Once
 	stop         sync.Once
 	wg           sync.WaitGroup
-	observedMu   sync.Mutex
-	observed     map[int64]time.Time
 }
 
 func NewOpenAIGroupQuotaFollowResetService(repo OpenAIGroupQuotaFollowResetRepository, billingCache *BillingCacheService) *OpenAIGroupQuotaFollowResetService {
@@ -83,34 +81,15 @@ func (s *OpenAIGroupQuotaFollowResetService) Observe(ctx context.Context, accoun
 	if s == nil || s.repo == nil || accountID <= 0 || resetAt.IsZero() {
 		return
 	}
-	resetAt = resetAt.UTC()
-	// A successful response commonly carries the same absolute weekly reset
-	// timestamp for the whole window. Avoid taking the account row lock again
-	// until a newer timestamp arrives. The database remains authoritative after
-	// process restarts and for observations from other instances.
-	s.observedMu.Lock()
-	if previous, ok := s.observed[accountID]; ok && !resetAt.After(previous) {
-		s.observedMu.Unlock()
-		return
-	}
-	s.observedMu.Unlock()
 	// The upstream observation remains valid if the downstream client has
 	// disconnected. Persist it synchronously before billing, with a bounded wait.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	created, err := s.repo.ObserveWeeklyReset(ctx, accountID, resetAt, time.Now().UTC())
+	created, err := s.repo.ObserveWeeklyReset(ctx, accountID, resetAt.UTC(), time.Now().UTC())
 	if err != nil {
-		slog.Warn("openai_group_quota_follow_observe_failed", "account_id", accountID, "reset_at", resetAt, "error", err)
+		slog.Warn("openai_group_quota_follow_observe_failed", "account_id", accountID, "reset_at", resetAt.UTC(), "error", err)
 		return
 	}
-	s.observedMu.Lock()
-	if s.observed == nil {
-		s.observed = make(map[int64]time.Time)
-	}
-	if previous, ok := s.observed[accountID]; !ok || resetAt.After(previous) {
-		s.observed[accountID] = resetAt
-	}
-	s.observedMu.Unlock()
 	if created > 0 {
 		s.Notify()
 	}

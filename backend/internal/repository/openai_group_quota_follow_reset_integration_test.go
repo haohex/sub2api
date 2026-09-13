@@ -96,8 +96,17 @@ func TestOpenAIGroupQuotaFollowResetRepository_EndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, created, "the same upstream reset time must be idempotent")
 
+	for offset := 1; offset <= 3; offset++ {
+		created, err = repo.ObserveWeeklyReset(ctx, accountID, firstResetAt.Add(time.Duration(offset)*time.Second), now.Add(time.Duration(offset)*time.Hour))
+		require.NoError(t, err)
+		require.Zero(t, created, "second-level reset_at drift must stay in the current weekly window")
+	}
+	created, err = repo.ObserveWeeklyReset(ctx, accountID, firstResetAt.Add(-time.Second), now.Add(4*time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, created, "a reset_at that moves backwards must not reset groups")
+
 	secondResetAt := firstResetAt.Add(7 * 24 * time.Hour)
-	created, err = repo.ObserveWeeklyReset(ctx, accountID, secondResetAt, now.Add(time.Hour))
+	created, err = repo.ObserveWeeklyReset(ctx, accountID, secondResetAt, firstResetAt)
 	require.NoError(t, err)
 	require.Equal(t, 3, created, "one source observation must create one event per bound group")
 
@@ -135,7 +144,7 @@ func TestOpenAIGroupQuotaFollowResetRepository_EndToEnd(t *testing.T) {
 	require.Zero(t, created)
 
 	thirdResetAt := secondResetAt.Add(7 * 24 * time.Hour)
-	created, err = repo.ObserveWeeklyReset(ctx, accountID, thirdResetAt, now.Add(3*time.Hour))
+	created, err = repo.ObserveWeeklyReset(ctx, accountID, thirdResetAt, secondResetAt)
 	require.NoError(t, err)
 	require.Equal(t, 3, created)
 
@@ -205,7 +214,9 @@ func newQuotaFollowFixture(t *testing.T) quotaFollowFixture {
 
 func (f quotaFollowFixture) observe(t *testing.T, window int) {
 	t.Helper()
-	created, err := f.repo.ObserveWeeklyReset(context.Background(), f.accountID, f.baseline.Add(time.Duration(window)*7*24*time.Hour), f.now.Add(time.Duration(window)*time.Minute))
+	next := f.baseline.Add(time.Duration(window) * 7 * 24 * time.Hour)
+	observedAt := f.baseline.Add(time.Duration(window-1) * 7 * 24 * time.Hour)
+	created, err := f.repo.ObserveWeeklyReset(context.Background(), f.accountID, next, observedAt)
 	require.NoError(t, err)
 	require.Equal(t, 1, created)
 }
@@ -318,7 +329,7 @@ func TestQuotaFollowReset_ConcurrentObservationBillingAndWorkers(t *testing.T) {
 	counts := make(chan int, 8)
 	for range 8 {
 		wg.Go(func() {
-			n, err := f.repo.ObserveWeeklyReset(ctx, f.accountID, f.baseline.Add(7*24*time.Hour), f.now.Add(time.Minute))
+			n, err := f.repo.ObserveWeeklyReset(ctx, f.accountID, f.baseline.Add(7*24*time.Hour), f.baseline)
 			errs <- err
 			counts <- n
 		})
