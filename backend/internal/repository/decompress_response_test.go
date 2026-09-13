@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -213,16 +214,51 @@ func TestDecompressResponseBodyInvalidGzipPreservesBodyBytes(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 }
 
-// 魔数对但头后半段被截断时字节已被 gzip.NewReader 吃掉、无法还原。此时必须保留
-// Content-Encoding：剩下的是裸 deflate 字节，删掉头等于把二进制重新标成明文，下游会把它
-// 当文本解析、写日志、回给客户端；带着头至少是自解释的失败。
-func TestDecompressResponseBodyTruncatedGzipKeepsEncodingHeader(t *testing.T) {
-	resp := newEncodedResponse("gzip", []byte{0x1f, 0x8b, 0x08})
+// 初始化已消费部分 gzip 头后，不能把剩余字节当作完整原文返回，也不能吞掉读取错误。
+// 错误留在 Body.Read，响应头与关闭链不变，不升级成 HTTPUpstream.Do 的请求错误。
+func TestDecompressResponseBodyInvalidGzipHeaderReturnsReadError(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+		readErr error
+		wantErr error
+	}{
+		{name: "short_fixed_header", payload: []byte{0x1f, 0x8b, 8}, wantErr: io.ErrUnexpectedEOF},
+		{name: "truncated_extra", payload: []byte{0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 255, 2, 0, 'x'}, wantErr: io.ErrUnexpectedEOF},
+		{name: "unterminated_name", payload: []byte{0x1f, 0x8b, 8, 8, 0, 0, 0, 0, 0, 255, 'x'}, wantErr: io.ErrUnexpectedEOF},
+		{name: "invalid_header_checksum", payload: []byte{0x1f, 0x8b, 8, 2, 0, 0, 0, 0, 0, 255, 0, 0, 'x'}, wantErr: gzip.ErrHeader},
+		{name: "canceled_header_read", payload: []byte{0x1f, 0x8b, 8}, readErr: context.Canceled, wantErr: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var source io.Reader = bytes.NewReader(tt.payload)
+			if tt.readErr != nil {
+				source = io.MultiReader(source, readerFunc(func([]byte) (int, error) { return 0, tt.readErr }))
+			}
+			sourceCloses, released := 0, 0
+			resp := newEncodedResponse("gzip", tt.payload)
+			resp.Body = wrapTrackedBody(io.NopCloser(source), func() { sourceCloses++ })
 
-	require.NotPanics(t, func() { decompressResponseBody(resp) })
+			decompressResponseBody(resp)
+			resp.Body = wrapTrackedBody(resp.Body, func() { released++ })
+			t.Cleanup(func() { _ = resp.Body.Close() })
 
-	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
-	require.NoError(t, resp.Body.Close())
+			body, err := io.ReadAll(resp.Body)
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Empty(t, body, "坏 gzip 头之后的残余字节不得伪装成完整响应")
+			n, err := resp.Body.Read(make([]byte, 1))
+			require.Zero(t, n)
+			require.ErrorIs(t, err, tt.wantErr, "失败后的后续读取不得退化成正常 EOF")
+			require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+			require.Equal(t, "123", resp.Header.Get("Content-Length"))
+			require.Equal(t, int64(len(tt.payload)), resp.ContentLength)
+			require.Zero(t, sourceCloses)
+			require.Zero(t, released)
+			require.NoError(t, resp.Body.Close())
+			require.Equal(t, 1, sourceCloses)
+			require.Equal(t, 1, released, "解码错误仍须释放在途请求计数")
+		})
+	}
 }
 
 // 带 Content-Encoding 的空体（204/304、空错误体）是完全正常的场景，不该刷 WARN。

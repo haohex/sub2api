@@ -1488,7 +1488,7 @@ func decompressResponseBody(resp *http.Response) {
 		// 不能把 resp.Body 直接交给 gzip.NewReader：它要先读掉 10 字节以上的头才知道成不成，
 		// 失败时那些字节已经从 body 里消失，而下面的 return 又保留着 Content-Encoding: gzip，
 		// 下游收到的是"声称 gzip 的残缺流"——比原样透传上游发来的东西更糟。
-		// 先套 bufio，用 Peek 出来的副本试构造：失败路径零消费，体与头都保持上游原样。
+		// 先套 bufio 探魔数；不匹配时零消费透传，匹配后初始化失败则保留读取错误。
 		bufferedBody := bufio.NewReader(resp.Body)
 		resp.Body = &decompressedBody{reader: bufferedBody, closer: originalBody}
 		// 只 Peek 魔数与压缩方法这 3 个字节。不能 Peek 更多：Peek(n) 会阻塞到攒够 n 字节，
@@ -1504,9 +1504,9 @@ func decompressResponseBody(resp *http.Response) {
 		}
 		gr, err := gzip.NewReader(bufferedBody)
 		if err != nil {
-			// 魔数对但头后半段坏了：那几个字节已被 gzip.NewReader 吃掉，无法还原。
-			// 仍然保留 Content-Encoding——剩下的是裸 deflate 字节，删掉头等于把二进制重新
-			// 标成明文，下游会把它当文本解析、记日志、回给客户端；带着头至少是自解释的失败。
+			// 初始化已消费部分头，不能再把残余体冒充原文。错误留在 Body.Read，
+			// 不升级为 Do 的连接错误；关闭仍交给原始 Body，以释放连接和在途计数。
+			resp.Body = &decompressedBody{readErr: fmt.Errorf("initialize gzip response: %w", err), closer: originalBody}
 			slog.Warn("gzip_decompress_failed", "error", err)
 			return
 		}
@@ -1559,11 +1559,15 @@ func (r *zstdResponseReader) Read(p []byte) (int, error) {
 
 // decompressedBody 组合解压 reader 和原始 body 的 close。
 type decompressedBody struct {
-	reader io.Reader
-	closer io.Closer
+	reader  io.Reader
+	closer  io.Closer
+	readErr error
 }
 
 func (d *decompressedBody) Read(p []byte) (int, error) {
+	if d.readErr != nil {
+		return 0, d.readErr
+	}
 	return d.reader.Read(p)
 }
 
