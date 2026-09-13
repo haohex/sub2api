@@ -29,3 +29,8 @@
 - 配置、权限、恢复及首次线上验证说明见 `docs/conventions/release-lifecycle.md`。
 - 当前分支原先没有 `docs/dev-journal.md`、`docs/tasks/` 或 `docs/conventions/codex-outbound-identity.md`。本次建立发布约定及日志，不臆造缺失的身份协议约定。
 - 验证：24 项状态机/打包/API 契约测试、actionlint、真实 GitHub API 只读检查通过；Docker Buildx 双架构 OCI 导出及 skopeo 保持摘要复制通过。补充原生 tag 令牌及旧 workflow 防回退测试。完整应用的首次线上构建/发布需本次改动进入 main 后验证。
+
+## 2026-09-13：上游同步改为仅创建审查 PR
+
+- 按维护流程调整：KlN 正式 Release 由定时任务检测并创建唯一同步分支和 PR；不再自动创建 draft/pre-release、构建候选或推进正式渠道。
+- 移除自动发布 workflow；同步 PR 合并后由维护者手动创建 GitHub Release。
