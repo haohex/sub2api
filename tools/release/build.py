@@ -18,14 +18,15 @@ def run(*args, **kwargs):
 def main():
     tag, sha = os.environ['RELEASE_TAG'], os.environ['RELEASE_SHA']
     version = tag.removeprefix('v')
-    simple = os.environ.get('SIMPLE_RELEASE') == 'true'
     out = Path(os.environ['BUNDLE_DIR']).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    if any(out.iterdir()):
+        raise RuntimeError('Bundle output directory must be empty')
     Path('backend/cmd/server/VERSION').write_text(version + '\n')
     run('pnpm', 'install', '--frozen-lockfile', cwd='frontend')
     run('pnpm', 'run', 'build', cwd='frontend')
     date = subprocess.check_output(['git', 'show', '-s', '--format=%cI', sha], text=True).strip()
-    targets = [('linux', 'amd64')] if simple else [
+    targets = [
         ('linux', 'amd64'), ('linux', 'arm64'), ('darwin', 'amd64'),
         ('darwin', 'arm64'), ('windows', 'amd64')]
     with tempfile.TemporaryDirectory() as temp:
@@ -40,8 +41,6 @@ def main():
             run('go', 'build', '-trimpath', '-tags=embed', '-ldflags',
                 f'-s -w -X main.Commit={sha} -X main.Date={date} -X main.BuildType=release',
                 '-o', str(binary), './cmd/server', cwd='backend', env=env)
-            if simple:
-                continue
             files = [(binary, binary.name)] + [(p, str(p)) for p in
                      [*Path('.').glob('LICENSE*'), *Path('.').glob('README*'), Path('deploy')]]
             name = f'sub2api_{version}_{goos}_{arch}'
@@ -66,7 +65,7 @@ def main():
         dockerfile = dockerfile.replace('COPY sub2api /app/sub2api',
                                        'ARG TARGETARCH\nCOPY bin/${TARGETARCH}/sub2api /app/sub2api')
         (context / 'Dockerfile').write_text(dockerfile)
-        platforms = 'linux/amd64' if simple else 'linux/amd64,linux/arm64'
+        platforms = 'linux/amd64,linux/arm64'
         run('docker', 'buildx', 'build', '--platform', platforms, '--provenance=false',
             '--label', f'org.opencontainers.image.revision={sha}',
             '--label', f'org.opencontainers.image.version={version}',
@@ -78,7 +77,7 @@ def main():
                 hashes[path.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
     (out / 'checksums.txt').write_text(''.join(f'{h}  {n}\n' for n, h in sorted(hashes.items()) if n != 'image.tar'))
     hashes['checksums.txt'] = hashlib.sha256((out / 'checksums.txt').read_bytes()).hexdigest()
-    (out / 'bundle.json').write_text(json.dumps({'tag': tag, 'sha': sha, 'simple': simple, 'files': hashes}))
+    (out / 'bundle.json').write_text(json.dumps({'tag': tag, 'sha': sha, 'simple': False, 'files': hashes}))
 
 
 if __name__ == '__main__':

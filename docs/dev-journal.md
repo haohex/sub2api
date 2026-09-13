@@ -1,5 +1,15 @@
 # 开发日志
 
+## 2026-09-13：恢复合并 PR 后的完整发布（Issue #13）
+
+- 根因：`4feaf5457` 删除 Release workflow，`.18` 仅创建 tag/Release，没有构建安装包或推送镜像；旧约定与实际流程矛盾。
+- 改为仅已合并 PR 发布：固定 merge SHA 与完整 tree，在草稿预约一次 hao 版本；无未合并预发布、不直接回写 main VERSION。KlN 同步和自有修改共用门禁，基础版本升级重置序号，冲突保留旧 VERSION 在合并前及发布时均拒绝。
+- 恢复完整五平台安装包、checksums 和 GHCR 双架构 OCI；取消简化模式。保留冻结摘要、找回中断前 artifact、原版本重试和稳定渠道防回退；公开 Release 前复核所有附件和镜像。Docker Hub 配齐双 secrets 后启用，用户已选择先用 GHCR。
+- 新增第一父链激活边界及真实 Git 回归，避免重发历史 PR；首次生效自动按固定 SHA `0f4136790` / PR #11 认领空 `.18`，提供手动 recover_tag 恢复入口。
+- main 七项必需检查、strict 更新、PR 要求、管理员保护和禁止强推/删除已通过 GitHub API 配置并回读；只允许 merge commit，不启用自动合并。配置模板纳入仓库。Wei-Shaw 同步改为仅手动，日常保留 KlN 单一轮询来源。
+- 验证：36 项发布/打包/真实 Git 激活测试通过，actionlint 1.7.12 及 git diff --check 通过；使用真实 GitHub GET API 和本地模拟写入演练，准确选择 `.18` 原 SHA，无远端变更。
+- 首次线上验收待本 PR 手动合并：检查 `.18` 补发、本 PR 新版本、六附件 checksum、GHCR 双架构与 latest。跟进见 `docs/tasks/release-rollout.md`。身份协议约定文件仍缺失，本次未修改应用协议。
+
 ## 2026-09-12：修复 OpenAI OAuth 周额度 reset_at 秒级漂移（Issue #9）
 
 - 参考 `LuckyKuang/sub2api-plus` 的 `v0.2.4+custom.002`，将周重置判定收敛为：上一窗口必须已结束，候选 `reset_at` 至少前进半个 7 天窗口；同一原始值允许重试以补齐遗漏的分组基线。

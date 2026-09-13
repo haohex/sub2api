@@ -97,6 +97,8 @@ release/
 !tools/release/
 tools/release/*
 !tools/release/*.py
+!tools/release/merged-only.json
+!tools/release/main-protection.json
 
 # 后端嵌入的前端构建产物
 # Keep a placeholder file so `//go:embed all:dist` always has a match in CI/lint,

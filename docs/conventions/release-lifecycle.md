@@ -1,47 +1,122 @@
-# PR 发布自动化
+# 合并 PR 后发布
 
-统一入口是 `.github/workflows/release.yml`，控制器为 `tools/release/reconcile.py`。
-只执行默认分支的控制器；候选源码在无写权限、无发布凭据的独立 runner 编译。
+产品仓库是 `haohex/sub2api`，默认分支是 `main`。唯一产品发布入口为
+`.github/workflows/release.yml`，控制器为 `tools/release/reconcile.py`。
+上游同步和自有修改共用此入口。只有维护者手动合并 PR 才产生新的产品版本，
+不要手动创建产品 tag 或空 Release，也不要从 tag push 触发另一套发布。
 
-## 生命周期
+## 两条开发路径
 
-1. 扫描目标为 main 的同仓库非草稿 PR，或自动化启用后已经合并的 PR。外部 Fork 仅在合并后纳入。
-2. 为实际源码提交分配 `v<基础版本>-hao.<序号>`。基础版本来自该提交的 VERSION，序号同时检查远程 tag 和草稿 Release，不能复用已占用版本。
-   产品 tag 优先由原生 GITHUB_TOKEN 创建以抑制旧提交的 tag-push workflow；创建成功后才使用发布凭据建立草稿。原生令牌被拒绝时，仅在候选与受信任 main 的整个 workflows tree 一致时回退到发布凭据，避免唤起旧的正式发布路径。若不同，明确失败并要求先同步 main，不能绕过。
-3. 草稿 Release 保留 canonical tag、PR、SHA、完整 tree、构建模式及重试状态。GitHub 的 `untagged-*` 是草稿内部别名，不作为构建版本；更新草稿始终显式传递 tag_name，附件使用 Release ID 上传。旧草稿从生成的标题恢复版本时，必须先核对真实 Git tag 的 SHA；损坏草稿隔离告警，已发布记录异常仍阻止正式渠道变更。复用 CI 和 Security Scan，在确定的源码 SHA 上执行 shell、test、frontend、golangci-lint、backend-security、frontend-security；任何失败均不能发布。
-4. 构建前端、五种平台安装包和 linux/amd64、linux/arm64 OCI 镜像；`SIMPLE_RELEASE=true` 时只构建 amd64 镜像。写入的 VERSION 仅存在于构建工作区。
-5. 上传 Actions 构建 bundle（90 天），在发布副作用前冻结 run ID 和每个文件的 SHA-256。后续重试下载同一 bundle，不能以新构建覆盖旧版本。过期且未完成的 bundle 标记废弃，自动分配新版本。
-6. 发布版本专属 GHCR 镜像和附件，Release 标为 prerelease。构建期间 PR 有新提交时，旧版本可保留为历史预发布，但不提升旧源码。
-7. PR 合并后读取真正的 merge_commit_sha。无论 merge、squash 还是 rebase，按完整 tree 判断内容一致性；相同则提升原候选，不同则自动新建版本并重新测试构建。tag 永不移动。
-8. 按基础版本、合并时间和版本序号选定正式渠道，阻止延迟完成的旧 PR 回退代码；如果较新合并结果的候选序号已经落后，分配新的更高序号。正式渠道从冻结的镜像 digest 同步，不依赖可变镜像标签。
-9. 正式阶段才写入 GHCR latest/major/minor、可选 Docker Hub 版本和渠道标签、默认分支 VERSION、GitHub Latest。各 API 不支持跨服务事务，可能短暂部分完成；每次扫描补齐，不因 Release 已正式发布而跳过。
+- KlN：每小时第 23 分钟检查 `KlN-4096/sub2api` 最新正式 Release，以其 tag
+  建立 `sync/kln-release/<tag>` 审查 PR。同一时间只保留一个同步 PR；已有 PR
+  时等待维护者处理，不覆盖分支。维护者在同步分支 merge main、处理冲突，
+  保留本仓库工作流、发布脚本和约定，并核对 VERSION 的基础版本。
+- 自有修改：从 main 创建功能或修复分支，提交 PR。包括工作流修改在内，
+  所有改动都经必需检查后手动合并。
 
-发布事件、CI 完成事件、手动运行和每 15 分钟 schedule 都扫描相同的持久状态。每轮只构建一个候选，按最近尝试时间轮转，避免失败 PR 阻塞其他 PR。GitHub 可能延迟 cron 或替换排队中的 run；不能保证精确 15 分钟，但不依赖单个事件的存活。
+统一使用 GitHub **Create a merge commit**。上游同步依赖祖先关系判断是否已包含
+某个 Release，不能用 squash/rebase 合并破坏这一关系。解决冲突时也应把 main
+merge 到同步分支，提交冲突解决结果后重新检查。
 
-首次激活边界是控制器首次加入 Git 历史的提交时间，避免把所有历史已合并 PR 重新发布。未合并的现有 PR 会被纳入。未携带控制器元数据的历史 Release 不自动认领、替换产物或重写渠道；历史误发布需要单独核对并修正。
+Wei-Shaw 的 `sync-upstream.yml` 保留为独立的手动维护工具；其审查 PR 如果合入
+main，也遵循相同发布门禁。日常 KlN 同步不依赖它，不自动混入第二条上游补丁线。
 
-## 必要设置与部署
+## main 保护与检查
 
-- 将本次工作流、脚本及约定一起合入 main；仅在功能分支中存在不会启用 schedule。网页手动合并就是首次激活方式，无需再手动点发布。
-- Actions 必须开启。仓库当前已经开启且允许所有 actions；工作流显式申请所需权限，默认只读权限可以保留。
-- 上游同步创建 PR 需要 Settings → Actions → General → Workflow permissions → **Allow GitHub Actions to create and approve pull requests**。当前该选项未开启。它允许创建 PR，不代表自动化会批准或合并 PR。
-- 可选仓库 secret `RELEASE_TOKEN`：当 GitHub 拒绝 GITHUB_TOKEN 为修改 workflow 的候选创建 tag/Release，或者分支保护阻止 VERSION 回写时需要配置。建议使用仅限本仓库的专用凭据，Contents: read/write、Pull requests: read/write、Actions: read、Workflows: read/write；使用 GitHub App 时也要处理 installation token 自动续期。不要把令牌明文写进仓库或聊天。
-- 开启 main 分支保护时，VERSION 自动回写身份必须具有适当的 bypass 权限，否则发布会持续报告 VERSION 同步失败。该身份只用于受信任控制器，构建任务仍只使用只读 GITHUB_TOKEN。不要为普通贡献者放开 bypass。
-- GHCR 使用 GITHUB_TOKEN；若已有 package 权限未继承仓库权限，在 package 的 Manage Actions access 中为本仓库授予写入权限。
+main 必须通过 PR 修改；管理员同样受保护，不给发布机器人直接推送的例外。
+禁止强推和删除，不要求线性历史，不开启自动合并。保护配置保存在
+`tools/release/main-protection.json`，可用 GitHub API 重放。个人维护可将必需批准数设为 0，
+但仍必须手动合并 PR，不能绕过检查。
 
-可选设置：仓库变量 `SIMPLE_RELEASE=true`（默认 false）；Docker Hub 的 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN` 两个 secrets。未配置 Docker Hub 时只有 GHCR，候选不会更新 Docker Hub。更改构建模式只影响新分配的候选，已有候选模式冻结。
+必需状态来自 GitHub Actions（App ID 15368）：`release-automation`、`shell`、
+`test`、`frontend`、`golangci-lint`、`backend-security`、`frontend-security`。
+合并前要求分支与 main 同步。`release-automation` 同时检查发布入口仍存在，
+避免上游同步再次删除发布工作流而 CI 假通过；同步 PR 的基础版本也在合并前校验。
 
-配置 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 时，完整模式仅在正式渠道全部同步成功后通知一次；简化模式和预发布不通知。通知成功后持久化标记，失败会重试；若发送成功后状态保存失败，可能重复通知（Telegram 不提供该场景的幂等键）。Docker Hub 描述更新不属于版本发布事务，统一流程不再在每次发版时覆盖描述。
+合并后发布再次调用 reusable CI/Security workflow：六项应用检查在固定的合并 SHA
+上执行；发布控制器的回归测试在受信任控制器 SHA 上执行。这允许用当前恢复工具
+检查没有新发布控制器的历史源码，例如 `.18`，同时仍完整检查其应用源码。
 
-## 恢复与检查
+## 版本与源码身份
 
-- 普通中断、网络故障、合并早于构建完成：等待下一轮扫描，也可手动运行 Release（无需 tag 参数）。不要删除已占用的 tag 或重传不同附件。
-- 构建失败：修正对应 PR 或测试问题后会自动构建最新源码；旧 PR 的重试不会阻塞其他候选。
-- 已正式发布但渠道不完整：重跑会再次校验 PR/tag 并补齐渠道和 VERSION；修正凭据后无需重建。
-- 关闭但不合并：候选保持预发布；不自动删除用户可能已下载的版本。
-- 一项构建产物被移动、篡改或已有附件摘要不符：停止该版本发布并明确报错，不覆盖以掩盖来源差异。
-- 自动化测试：`python3 -m unittest discover -s tools/release -p 'test_*.py' -v`；工作流使用 actionlint 验证。首次线上完整构建还要核验下载附件、GHCR 两种架构、PR 合并前后状态以及正式渠道一致性。
+PR 未合并时不创建 Release、不占版本号。合并后固定 PR 号、`merge_commit_sha`、
+完整 tree 和合并时间，后续不跟随 main 移动，也不复用仅 tree 相同的其他提交。
 
-## 上游同步
+基础版本来自该合并 SHA 的 `backend/cmd/server/VERSION`。源码 VERSION 只维护基础
+版本，如 `0.2.4`；构建工作区将它替换为 `0.2.4-hao.19`，不提交回 main。
+同步 PR 的分支 tag 必须与合并源码基础版本一致，冲突解决保留了旧基础版本时拒绝发版。
 
-KlN 仍以正式 Release tag 建立单个审查 PR。上游 Release 只触发同步分支和审查 PR，不创建 draft/pre-release，也不构建或发布产品版本；同步 PR 合并后由维护者手动创建 GitHub Release。Wei-Shaw 同步保留本地 rebase、定向测试和身份漂移检查，但只推送 `sync/wei-release/<tag>` 审查分支，不再强推 klno/main 或直接发布。产品 main 不再作为可随意重建的 cron 宿主。
+- 同一基础版本：检查所有远程 tag、Release 和草稿中的 canonical tag，取最大 N + 1。
+- `v0.2.4-klno.5` 仍使用 `v0.2.4-hao.N` 递增。
+- 首次合入 `v0.2.5-klno.1` 使用 `v0.2.5-hao.1`；已有该基础版本时继续递增。
+- 同一合并 PR 只有一个版本；构建/发布重试不重新分配，不移动已存在的 tag。
+
+先用草稿 Release 持久化版本预约。检查和构建成功后才创建公开 tag，避免仅有 tag
+而无构建结果。GitHub 草稿可能显示 `untagged-*`，控制器始终保存和使用 canonical tag。
+
+## 构建、发布和权限
+
+1. 合并事件触发；每 15 分钟补偿扫描及手动运行共用状态机。每轮处理一个 PR，
+   优先按合并时间分配新版本，失败重试轮转；全仓串行且不取消运行中的发布。
+2. 使用默认分支受信任控制器；源码 runner 没有发布凭据且只有只读权限。
+   两个 reusable workflow 全部成功后，才构建前端、五个平台安装包和双架构 OCI 镜像。
+3. Actions artifact 保存 bundle（90 天）。计划阶段记录 build run；即使上传 artifact
+   后、发布前中断，后续也能找回原包。发布前冻结文件 SHA-256、bundle run 和镜像 digest。
+4. 独立发布任务核对身份、完整文件集合、checksums、OCI 平台和摘要，写入版本专属 GHCR
+   标签并上传附件。已有同版本内容只能相同，绝不覆盖不同内容。
+5. 补齐可选 Docker Hub 的每个版本标签；复核 tag、附件摘要和镜像平台后，按基础版本、
+   合并时间和版本号选择稳定渠道。延迟完成的老版本可以发布，但不能回退 latest。
+6. 同步 GHCR/Docker Hub 的 latest、major、minor 后才把新草稿正式公开并设置 GitHub Latest。
+   服务之间没有事务，网络中断可能留下部分更新；下轮继续补齐，不因 Release 已正式而跳过。
+
+完整发布必须包含：Linux amd64/arm64、macOS amd64/arm64、Windows amd64 五个压缩包，
+以及 `checksums.txt`。GHCR 地址为 `ghcr.io/haohex/sub2api`，版本标签不含前导 v，
+例如 `0.2.4-hao.19`；镜像必须同时包含 linux/amd64、linux/arm64。
+旧 `SIMPLE_RELEASE` 变量不再生效，不能静默省略下载附件或 arm64。
+
+tag 优先用原生 GITHUB_TOKEN 创建，避免触发旧源码的 tag-push 发布工作流。
+仅当候选和受信任控制器的 workflows tree 完全一致时，才允许因权限问题回退
+到 RELEASE_TOKEN。恢复已有 tag 不创建、不移动 tag。
+
+## GitHub 设置
+
+- Actions 开启即可，默认权限可保持只读，工作流逐 job 申请权限。
+- `RELEASE_TOKEN` 用于自动同步 PR 和必要的 Release 写操作。使用本仓库专用 PAT
+  或 GitHub App 凭据，具备 Contents/PR 写权限、Actions 读权限，修改 workflows 时
+  还需对应权限。同步明确要求此凭据，避免退回 GITHUB_TOKEN 后 PR 检查需额外批准或未触发。
+- GHCR 使用 job 的 GITHUB_TOKEN。已有 package 须允许本仓库 Actions 写入；面向公开
+  安装的 package 应设为 public，并做匿名拉取验收。
+- Docker Hub 为可选镜像副本：设置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`
+  两个 secrets 后发布到 `<username>/sub2api`。必须同时设置或同时不设置，缺一个会报错。
+  未配置时完整发布仍包含 GHCR 双架构镜像及所有安装包。
+- 不需要 VERSION 写回权限、分支 bypass 或 Telegram 通知凭据。
+
+## 激活与恢复
+
+新流程必须经本次 PR 手动 merge 到 main 才生效。首次激活边界是
+`tools/release/merged-only.json` 首次进入 main 第一父链的提交时间，包含激活 PR 本身，
+不为更早的历史合并批量发版。schema 1 的旧预发布记录不再续建或自动提升。
+
+普通失败重跑 Release（不填输入）或等待扫描即可。没有冻结发布副作用的失败构建
+可以在原预约版本重建；已冻结 bundle 若过期/丢失则报错，需要恢复原始 bundle，
+不能用重建或递增版本掩盖同版本来源问题。
+
+首次激活会按 `merged-only.json` 中审计过的仓库、tag、SHA 和 PR 自动认领空的 `.18`，
+补发成功后继续发布新的合并结果；若已有附件则不自动接管。
+
+其他空历史 Release 可用 `workflow_dispatch` 的 `recover_tag` 显式认领：
+
+```bash
+gh workflow run release.yml --repo haohex/sub2api --ref main \
+  -f recover_tag=v0.2.4-hao.18
+```
+
+仅接受已有 tag + Release，tag 必须恰好对应一个已合并 PR 的真实 merge SHA，
+基础版本一致且尚无附件。已有受管状态会继续重试；已受旧控制器管理的历史版本
+不自动接管。首次认领后的恢复不受激活日期限制，失败后定时扫描继续完成。
+`.18` 固定使用 `0f4136790c2bbb70b44e6ea48d9a5312f7efc702`（PR #11），不得换成新 main。
+如果已有版本镜像摘要与本次构建不同，停止并核对已有产物，不能覆盖。
+
+最终验收：下载全部六个附件并运行 checksum 验证；检查二进制版本与 tag 一致；
+匿名拉取 GHCR 两种架构；核验版本标签与 latest 的 digest；配置 Docker Hub 时同样核验。
+本地验证命令：`python3 -m unittest discover -s tools/release -p 'test_*.py' -v`，以及 `actionlint`。

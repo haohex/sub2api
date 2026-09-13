@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "policy": "merged-pr-full-release",
+  "recover_releases": [
+    {
+      "repo": "haohex/sub2api",
+      "tag": "v0.2.4-hao.18",
+      "sha": "0f4136790c2bbb70b44e6ea48d9a5312f7efc702",
+      "pr": 11
+    }
+  ]
+}
