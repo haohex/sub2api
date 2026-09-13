@@ -4,8 +4,6 @@ name: Sync upstream into klno
 # 不再自动打产品标签，也不再重建 main；发布由统一 Release 流程处理。
 
 on:
-  schedule:
-    - cron: '17 3 * * *' # UTC，每天一次
   workflow_dispatch:
     inputs:
       upstream_tag:

@@ -14,7 +14,7 @@ class BuildTests(unittest.TestCase):
     def test_full_bundle_platforms_archives_and_image_context(self):
         self.check_bundle(False)
 
-    def test_simple_bundle_contains_only_image_and_manifest(self):
+    def test_legacy_simple_flag_cannot_disable_full_artifacts(self):
         self.check_bundle(True)
 
     def check_bundle(self, simple):
@@ -40,8 +40,7 @@ class BuildTests(unittest.TestCase):
                     self.assertIn('COPY bin/${TARGETARCH}/sub2api', (context / 'Dockerfile').read_text())
                     self.assertEqual((context / 'bin/amd64/sub2api').read_text(), 'linux/amd64')
                     self.assertTrue((context / 'backend/resources').is_dir())
-                    if not simple:
-                        self.assertEqual((context / 'bin/arm64/sub2api').read_text(), 'linux/arm64')
+                    self.assertEqual((context / 'bin/arm64/sub2api').read_text(), 'linux/arm64')
                     (output / 'image.tar').write_bytes(b'oci')
 
             original = Path.cwd()
@@ -55,15 +54,14 @@ class BuildTests(unittest.TestCase):
             finally:
                 os.chdir(original)
             manifest = json.loads((output / 'bundle.json').read_text())
-            self.assertEqual(manifest['simple'], simple)
-            self.assertEqual(len(manifest['files']), 2 if simple else 7)
-            self.assertEqual(len([c for c in calls if c[0] == 'go']), 1 if simple else 5)
-            if not simple:
-                with tarfile.open(output / 'sub2api_0.2.4-hao.10_linux_amd64.tar.gz') as archive:
-                    self.assertEqual(archive.extractfile('sub2api').read(), b'linux/amd64')
-                    self.assertIn('deploy/docker-entrypoint.sh', archive.getnames())
-                with zipfile.ZipFile(output / 'sub2api_0.2.4-hao.10_windows_amd64.zip') as archive:
-                    self.assertEqual(archive.read('sub2api.exe'), b'windows/amd64')
+            self.assertFalse(manifest['simple'])
+            self.assertEqual(len(manifest['files']), 7)
+            self.assertEqual(len([c for c in calls if c[0] == 'go']), 5)
+            with tarfile.open(output / 'sub2api_0.2.4-hao.10_linux_amd64.tar.gz') as archive:
+                self.assertEqual(archive.extractfile('sub2api').read(), b'linux/amd64')
+                self.assertIn('deploy/docker-entrypoint.sh', archive.getnames())
+            with zipfile.ZipFile(output / 'sub2api_0.2.4-hao.10_windows_amd64.zip') as archive:
+                self.assertEqual(archive.read('sub2api.exe'), b'windows/amd64')
 
 
 if __name__ == '__main__':

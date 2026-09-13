@@ -27,6 +27,15 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Require a token that triggers PR checks
+        env:
+          SYNC_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          test -n "$SYNC_TOKEN" || {
+            echo '::error::Configure RELEASE_TOKEN so automated sync PRs can run required checks'
+            exit 1
+          }
+
       - name: Checkout base branch
         uses: actions/checkout@v6
         with:
@@ -43,7 +52,7 @@ jobs:
           set -euo pipefail
           release_json=$(mktemp)
           if [ -n "$RELEASE_TAG_INPUT" ]; then
-            if [[ ! "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            if [[ ! "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-klno\.[0-9]+$ ]]; then
               echo "::error::unexpected KlN release tag input: $RELEASE_TAG_INPUT"
               exit 1
             fi
@@ -57,15 +66,20 @@ jobs:
             echo "::error::the selected KlN release is not a published stable release"
             exit 1
           fi
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-klno\.[0-9]+$ ]]; then
             echo "::error::unexpected KlN release tag: $tag"
             exit 1
           fi
 
-          jq -r '.body // ""' "$release_json" > release-body.md
-          if [ ! -s release-body.md ]; then
-            printf 'KlN release %s\n' "$tag" > release-body.md
-          fi
+          python3 - "$tag" > release-body.md <<'PYBODY'
+          import sys
+          tag = sys.argv[1]
+          print(f"同步 KlN 正式版本 `{tag}`。")
+          print(f"\n上游发布：https://github.com/KlN-4096/sub2api/releases/tag/{tag}")
+          print("\n请在此分支合入 main 并解决冲突，保留本仓库发布工作流和约定。")
+          print("核对 VERSION 的基础版本与上游 tag 一致；所有必需检查通过后，手动使用 Create a merge commit 合并。")
+          print("合并后自动发布完整安装包与多架构镜像，无需手动创建 tag 或 Release。")
+          PYBODY
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'branch=%s/%s\n' "$SYNC_BRANCH_PREFIX" "$tag" >> "$GITHUB_OUTPUT"
 

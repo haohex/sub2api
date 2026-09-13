@@ -33,6 +33,26 @@ def version_key(tag):
     return tuple(map(int, match.groups())) if match else None
 
 
+def source_base(version, branch):
+    match = re.fullmatch(r'(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?', version.strip().removeprefix('v'))
+    if not match:
+        raise RuntimeError('Cannot determine release base version')
+    base = match[1]
+    if branch.startswith('sync/kln-release/'):
+        tag = branch.removeprefix('sync/kln-release/')
+        upstream = re.fullmatch(r'v(\d+\.\d+\.\d+)-klno\.\d+', tag)
+        if not upstream or upstream[1] != base:
+            raise RuntimeError('Merged VERSION differs from the KlN release base version')
+    return base
+
+
+def expected_files(tag):
+    return {'image.tar', 'checksums.txt'} | {
+        f'sub2api_{tag[1:]}_{platform}.{extension}' for platform, extension in [
+            ('linux_amd64', 'tar.gz'), ('linux_arm64', 'tar.gz'),
+            ('darwin_amd64', 'tar.gz'), ('darwin_arm64', 'tar.gz'), ('windows_amd64', 'zip')]}
+
+
 def digest_file(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
@@ -67,7 +87,7 @@ def body_for(state):
     # Never interpolate PR text into shell commands or executable files.
     return (f'PR #{state["pr"]} · commit `{state["sha"]}`\n\n'
             f'构建模式：{"linux/amd64 镜像" if state["simple"] else "完整安装包与多架构镜像"}。'
-            '\n候选版本仅供测试；正式版在合并校验完成后自动提升。\n\n'
+            '\n合并后发布；完整产物与镜像验证通过后正式发布。\n\n'
             '<!-- sub2api-release-v1\n' + json.dumps(state, sort_keys=True) + '\n-->')
 
 
@@ -145,18 +165,19 @@ class Reconciler:
         return self.gh.api('commits/' + sha)
 
     def eligible(self, pr):
-        return (pr['base']['ref'] == self.branch and not pr['draft']
-                and (pr['merged'] or (pr['head']['repo'] is not None
-                     and pr['head']['repo']['full_name'] == self.gh.repo)))
+        return (pr['base']['ref'] == self.branch and pr['merged']
+                and bool(pr.get('merged_at')) and bool(SHA.fullmatch(pr['merge_commit_sha'])))
 
     def source(self, pr):
-        return pr['merge_commit_sha'] if pr['merged'] else pr['head']['sha']
+        if not self.eligible(pr):
+            raise RuntimeError('Only merged PRs targeting the default branch may release')
+        return pr['merge_commit_sha']
 
     def same_source(self, state, pr):
-        if not self.eligible(pr) or (pr['state'] == 'closed' and not pr['merged']):
+        if not self.eligible(pr):
             return False
-        source = self.source(pr)
-        return state['sha'] == source or state['tree'] == self.commit(source)['commit']['tree']['sha']
+        return (state['sha'] == self.source(pr)
+                and state['tree'] == self.commit(state['sha'])['commit']['tree']['sha'])
 
     def managed(self):
         result = []
@@ -166,7 +187,8 @@ class Reconciler:
                 if not state:
                     continue
                 if release['tag_name'] != state['tag']:
-                    self.verify_tag(dict(release, tag_name=state['tag']), state)
+                    self.verify_tag(dict(release, tag_name=state['tag']), state,
+                                    missing=state.get('schema') == 2 and release['draft'])
                     release['tag_name'] = state['tag']
                 result.append((release, state))
             except (ValueError, KeyError, TypeError, RuntimeError) as error:
@@ -176,66 +198,136 @@ class Reconciler:
                 print(f'::warning::Quarantined release {release["id"]}: {error}')
         return result
 
+    def active(self):
+        # v1 pre-merge candidates are historical records, never resumed by v2.
+        return [(r, s) for r, s in self.managed() if s.get('schema') == 2]
+
+    def base_version(self, pr, sha):
+        content = self.gh.api(f'contents/backend/cmd/server/VERSION?ref={sha}')
+        version = base64.b64decode(content['content']).decode().strip().removeprefix('v')
+        return source_base(version, pr['head'].get('ref', ''))
+
+    def recover(self, tag):
+        if not version_key(tag):
+            raise RuntimeError('Invalid recovery tag')
+        release = next((r for r in self.releases if r['tag_name'] == tag), None)
+        if release is None:
+            raise RuntimeError('Recovery requires an existing release and tag')
+        state = state_of(release)
+        if state:
+            if state.get('schema') != 2:
+                raise RuntimeError('Cannot adopt a managed historical release')
+            return release, state
+        if self.gh.pages(f'releases/{release["id"]}/assets'):
+            raise RuntimeError('Recovery only adopts empty releases; existing assets must not be replaced')
+        sha = self.tag_commit(tag)
+        prs = self.gh.pages(f'commits/{sha}/pulls')
+        matches = [self.pr(p['number']) for p in prs]
+        matches = [p for p in matches if self.eligible(p) and p['merge_commit_sha'] == sha]
+        if len(matches) != 1:
+            raise RuntimeError('Recovery tag must identify exactly one merged PR result')
+        pr = matches[0]
+        if self.base_version(pr, sha) != '.'.join(map(str, version_key(tag)[:3])):
+            raise RuntimeError('Recovery tag base version differs from source')
+        state = dict(schema=2, tag=tag, pr=pr['number'], sha=sha,
+                     tree=self.commit(sha)['commit']['tree']['sha'], simple=False,
+                     merged_at=pr['merged_at'], recovery=True, ready=False)
+        self.save(release, state)
+        return release, state
+
+    def resume(self, release, state):
+        if state.get('ready'):
+            self.output(work='false', build='false')
+            return
+        state['attempted_at'] = datetime.now(timezone.utc).isoformat()
+        self.save(release, state)
+        run = state.get('bundle_run') or state.get('build_run')
+        reusable = False
+        if run:
+            artifacts = self.gh.pages(f'actions/runs/{run}/artifacts', 'artifacts')
+            reusable = any(a['name'] == state['tag'] and not a['expired'] for a in artifacts)
+            if not reusable and state.get('files'):
+                # Once any publication can have happened, rebuilding may change bytes.
+                raise RuntimeError('Frozen artifact unavailable; restore the original bundle, do not rebuild or renumber')
+        if reusable:
+            state['bundle_run'] = run
+        else:
+            state.pop('bundle_run', None)
+            state['build_run'] = int(os.environ['GITHUB_RUN_ID'])
+        state['attempted_at'] = datetime.now(timezone.utc).isoformat()
+        self.save(release, state)
+        self.output(work='true', build=str(not reusable).lower(), tag=state['tag'],
+                    sha=state['sha'], bundle_run=str(run if reusable else ''))
+
+    def bootstrap_recovery(self):
+        config = json.loads(Path(__file__).with_name('merged-only.json').read_text())
+        for entry in config.get('recover_releases', []):
+            if entry['repo'] != self.gh.repo:
+                continue
+            release = next((r for r in self.releases if r['tag_name'] == entry['tag']), None)
+            if release is None or state_of(release):
+                continue
+            if self.gh.pages(f'releases/{release["id"]}/assets'):
+                continue  # A maintainer has already supplied assets; never adopt implicitly.
+            if self.tag_commit(entry['tag']) != entry['sha']:
+                raise RuntimeError('Bootstrap recovery tag differs from the audited source')
+            pr = self.pr(entry['pr'])
+            if not self.eligible(pr) or pr['merge_commit_sha'] != entry['sha']:
+                raise RuntimeError('Bootstrap recovery PR differs from the audited source')
+            self.recover(entry['tag'])
+
     def plan(self):
+        recovery = os.environ.get('RECOVER_TAG', '')
+        if recovery:
+            self.resume(*self.recover(recovery))
+            return
+        self.bootstrap_recovery()
         since = datetime.fromisoformat(os.environ['AUTOMATION_SINCE'].replace('Z', '+00:00'))
-        # Include merged PRs even if an event was suppressed or no candidate existed.
-        prs = self.gh.pages(f'pulls?state=all&base={quote(self.branch)}&sort=updated&direction=desc')
+        known = self.active()
         candidates = []
-        known = self.managed()
+        # Recovery records remain eligible even before the new activation boundary.
+        for release, state in known:
+            if state.get('recovery') and not state.get('ready'):
+                candidates.append((release, state))
+        prs = self.gh.pages(f'pulls?state=closed&base={quote(self.branch)}&sort=updated&direction=desc')
         for summary in prs:
-            if summary['state'] == 'closed' and (not summary.get('merged_at') or
-                    datetime.fromisoformat(summary['merged_at'].replace('Z', '+00:00')) < since):
+            if not summary.get('merged_at') or datetime.fromisoformat(
+                    summary['merged_at'].replace('Z', '+00:00')) < since:
                 continue
             pr = self.pr(summary['number'])
             if not self.eligible(pr):
                 continue
-            source = self.source(pr)
-            commit = self.commit(source)
-            tree = commit['commit']['tree']['sha']
-            matches = [(r, s) for r, s in known if s['pr'] == pr['number']
-                       and not s.get('abandoned') and (s['sha'] == source or s['tree'] == tree)]
-            if any(s.get('ready') for _, s in matches):
-                continue
+            matches = [(r, s) for r, s in known if s['pr'] == pr['number']]
             if matches:
-                release, state = max(matches, key=lambda item: version_key(item[0]['tag_name']))
-                if state.get('bundle_run'):
-                    artifacts = self.gh.pages(f'actions/runs/{state["bundle_run"]}/artifacts', 'artifacts')
-                    if not any(a['name'] == release['tag_name'] and not a['expired'] for a in artifacts):
-                        state['abandoned'] = 'Build artifact expired; allocate a new immutable version'
-                        self.save(release, state)
-                        matches = []
-            if not matches:
-                state = {'pr': pr['number'], 'sha': source, 'tree': tree,
-                         'simple': os.environ.get('SIMPLE_RELEASE') == 'true'}
-                release = None
-            candidates.append((release, state))
+                if len(matches) != 1 or not self.same_source(matches[0][1], pr):
+                    raise RuntimeError('Merged PR release identity changed')
+                if not matches[0][1].get('ready') and matches[0] not in candidates:
+                    candidates.append(matches[0])
+                continue
+            sha = self.source(pr)
+            candidates.append((None, dict(schema=2, pr=pr['number'], sha=sha,
+                                         tree=self.commit(sha)['commit']['tree']['sha'],
+                                         simple=False, merged_at=pr['merged_at'])))
         if not candidates:
             self.output(work='false', build='false')
             return
-        # One build per run; round robin prevents a broken PR starving others.
-        release, state = min(candidates, key=lambda pair: pair[1].get('attempted_at', ''))
+        # Allocate new merges chronologically; retries rotate so failures do not starve others.
+        release, state = min(candidates, key=lambda pair: (
+            pair[1].get('attempted_at', ''), pair[1]['merged_at'], pair[1]['pr']))
         if release is None:
-            content = self.gh.api(f'contents/backend/cmd/server/VERSION?ref={state["sha"]}')
-            base = base64.b64decode(content['content']).decode().strip().removeprefix('v')
-            match = re.match(r'^(\d+\.\d+\.\d+)(?:-|$)', base)
-            if not match:
-                raise RuntimeError('Cannot determine release base version')
-            prefix = 'v' + match[1] + '-hao.'
-            tags = [r['tag_name'] for r in self.releases] + [t['name'] for t in self.gh.pages('tags')]
+            base = self.base_version(self.pr(state['pr']), state['sha'])
+            prefix = 'v' + base + '-hao.'
+            tags = [s['tag'] for _, s in self.managed()]
+            tags += [r['tag_name'] for r in self.releases] + [t['name'] for t in self.gh.pages('tags')]
             number = max([int(t[len(prefix):]) for t in tags
                           if t.startswith(prefix) and t[len(prefix):].isdigit()] or [0]) + 1
-            tag = prefix + str(number)
-            self.create_tag(tag, state['sha'])
-            state['tag'] = tag
+            tag = state['tag'] = prefix + str(number)
+            # Reserve in a draft first. No public tag is created before checks/build succeed.
             release = self.gh.api('releases', 'POST', {
                 'tag_name': tag, 'target_commitish': state['sha'], 'draft': True,
-                'prerelease': True, 'make_latest': 'false', 'name': f'Sub2API {tag[1:]}',
+                'prerelease': False, 'make_latest': 'false', 'name': f'Sub2API {tag[1:]}',
                 'body': body_for(state)})
-        state['attempted_at'] = datetime.now(timezone.utc).isoformat()
-        self.save(release, state)
-        self.output(work='true', build=str(not state.get('bundle_run')).lower(),
-                    tag=release['tag_name'], sha=state['sha'],
-                    simple=str(state['simple']).lower(), bundle_run=str(state.get('bundle_run', '')))
+        self.resume(release, state)
 
     def create_tag(self, tag, sha):
         payload = {'ref': 'refs/tags/' + tag, 'sha': sha}
@@ -270,19 +362,15 @@ class Reconciler:
         state = state_of(release)
         if state.get('ready'):
             return
+        if state.get('schema') != 2 or state['simple']:
+            raise RuntimeError('Only full merged-PR releases may publish')
         bundle = Path(os.environ['BUNDLE_DIR'])
         manifest = json.loads((bundle / 'bundle.json').read_text())
         if (manifest['tag'] != release['tag_name'] or manifest['sha'] != state['sha']
                 or manifest['simple'] != state['simple']):
             raise RuntimeError('Bundle does not match the allocated release')
         files = manifest['files']
-        expected = {'image.tar', 'checksums.txt'}
-        if not state['simple']:
-            version = release['tag_name'][1:]
-            expected.update(f'sub2api_{version}_{platform}.{extension}' for platform, extension in [
-                ('linux_amd64', 'tar.gz'), ('linux_arm64', 'tar.gz'),
-                ('darwin_amd64', 'tar.gz'), ('darwin_arm64', 'tar.gz'), ('windows_amd64', 'zip')])
-        if set(files) != expected:
+        if set(files) != expected_files(state['tag']):
             raise RuntimeError('Incomplete bundle')
         for name, digest in files.items():
             if not re.fullmatch(r'[a-zA-Z0-9_.-]+', name) or not re.fullmatch(r'[a-f0-9]{64}', digest):
@@ -290,14 +378,21 @@ class Reconciler:
             path = bundle / name
             if path.is_symlink() or digest_file(path) != digest:
                 raise RuntimeError('Bundle integrity failure: ' + name)
+        checksums = ''.join(f'{digest}  {name}\n' for name, digest in sorted(files.items())
+                            if name not in {'image.tar', 'checksums.txt'})
+        if (bundle / 'checksums.txt').read_text() != checksums:
+            raise RuntimeError('Checksum manifest does not describe the binary archives')
         if state.get('files') and state['files'] != files:
             raise RuntimeError('Refusing to overwrite an immutable build')
+        if not self.same_source(state, self.pr(state['pr'])):
+            raise RuntimeError('Bundle source is not the merged PR result')
         self.verify_tag(release, state, missing=True)
         # Persist the exact successful, fully tested build before publishing anything.
         state.update(files=files, bundle_run=state.get('bundle_run') or int(os.environ['GITHUB_RUN_ID']))
         self.save(release, state)
         target = self.image + ':' + release['tag_name'][1:]
         archive = 'oci-archive:' + str(bundle / 'image.tar')
+        self.verify_platforms(archive)
         expected_digest = self.inspect_reference(archive)
         if state.get('image_digest') and state['image_digest'] != expected_digest:
             raise RuntimeError('Frozen image digest differs from the bundle')
@@ -314,18 +409,39 @@ class Reconciler:
                     raise RuntimeError('Existing asset differs: ' + name)
             else:
                 self.gh.upload(release['id'], bundle / name)
-        # A late PR update may leave this as a superseded prerelease; never promote it blindly.
+        if self.tag_commit(state['tag'], missing=True) is None:
+            self.create_tag(state['tag'], state['sha'])
+        self.verify_tag(release, state)
         state['ready'] = True
-        self.save(release, state, draft=False, prerelease=True, make_latest='false')
+        self.save(release, state)
+
+    def tag_commit(self, tag, missing=False):
+        ref = self.gh.api('git/ref/tags/' + quote(tag, safe=''), missing=missing)
+        if ref is None:
+            if missing:
+                return None
+            raise RuntimeError('Release tag is missing')
+        obj = ref['object']
+        while obj['type'] == 'tag':
+            obj = self.gh.api('git/tags/' + obj['sha'])['object']
+        if obj['type'] != 'commit' or not SHA.fullmatch(obj['sha']):
+            raise RuntimeError('Release tag does not point at a commit')
+        return obj['sha']
 
     def verify_tag(self, release, state, missing=False):
-        ref = self.gh.api('git/ref/tags/' + quote(release['tag_name'], safe=''), missing=missing)
-        if ref:
-            obj = ref['object']
-            while obj['type'] == 'tag':
-                obj = self.gh.api('git/tags/' + obj['sha'])['object']
-            if obj['sha'] != state['sha']:
-                raise RuntimeError('Tag moved; refusing publication')
+        sha = self.tag_commit(state.get('tag') or release['tag_name'], missing=missing)
+        if sha is not None and sha != state['sha']:
+            raise RuntimeError('Tag moved; refusing publication')
+
+    @staticmethod
+    def verify_platforms(reference):
+        result = subprocess.run(['skopeo', 'inspect', '--raw', reference],
+                                capture_output=True, text=True, check=True)
+        manifest = json.loads(result.stdout)
+        platforms = {(m.get('platform', {}).get('os'), m.get('platform', {}).get('architecture'))
+                     for m in manifest.get('manifests', [])}
+        if platforms != {('linux', 'amd64'), ('linux', 'arm64')}:
+            raise RuntimeError('Release image must contain linux/amd64 and linux/arm64')
 
     @staticmethod
     def inspect_image(image):
@@ -362,127 +478,69 @@ class Reconciler:
 
     def promote(self):
         errors = []
-        # First establish which ready candidates actually represent merged code.
-        for release, state in self.managed():
-            if not state.get('ready') or state.get('abandoned'):
+        ready = []
+        hub = os.environ.get('DOCKERHUB_USERNAME', '')
+        for release, state in self.active():
+            if not state.get('ready'):
                 continue
             try:
-                pr = self.pr(state['pr'])
-                if not pr['merged'] or not self.same_source(state, pr):
-                    continue
+                if not self.same_source(state, self.pr(state['pr'])):
+                    raise RuntimeError('Release no longer matches its merged source')
                 self.verify_tag(release, state)
-                if release['prerelease']:
-                    stable_peers = [(r, state_of(r)) for r in self.releases
-                                    if r['id'] not in self.quarantined and not r['draft'] and not r['prerelease']
-                                    and version_key(r['tag_name'])
-                                    and version_key(r['tag_name'])[:3] == version_key(release['tag_name'])[:3]]
-                    if any(s and s.get('merged_at', '') > pr['merged_at'] for _, s in stable_peers):
-                        continue  # An older merge completing late stays a historical prerelease.
-                    if any(version_key(r['tag_name']) > version_key(release['tag_name']) for r, _ in stable_peers):
-                        state['abandoned'] = 'Newer merged code requires a new monotonically increasing version'
-                        self.save(release, state)
-                        continue
-                    state['merged_sha'] = pr['merge_commit_sha']
-                    state['merged_at'] = pr['merged_at']
-                    # Stable aliases are reconciled separately, even after a partial failure.
-                    self.save(release, state, prerelease=False, make_latest='false')
+                source = 'docker://' + self.image + '@' + state['image_digest']
+                if set(state.get('files', {})) != expected_files(state['tag']):
+                    raise RuntimeError('Incomplete frozen release manifest')
+                self.verify_platforms(source)
+                self.ensure_version_image(source, self.image + ':' + state['tag'][1:], state['image_digest'])
+                assets = {a['name']: a for a in self.gh.pages(f'releases/{release["id"]}/assets')}
+                for name, digest in state['files'].items():
+                    if name != 'image.tar' and assets.get(name, {}).get('digest') != 'sha256:' + digest:
+                        raise RuntimeError('Published asset missing or changed: ' + name)
+                # Every version gets its Docker Hub tag, including delayed historical builds.
+                if hub:
+                    self.ensure_version_image(source, hub + '/sub2api:' + state['tag'][1:],
+                                              state['image_digest'])
+                ready.append((release, state))
             except Exception as error:
                 errors.append(str(error))
-        invalid = set()
-        # An invalid stable release must never be chosen as a channel source.
-        for release, state in self.managed():
-            if release['draft'] or release['prerelease']:
-                continue
-            try:
-                pr = self.pr(state['pr'])
-                if not pr['merged'] or not self.same_source(state, pr) or not state.get('ready'):
-                    raise RuntimeError('Stable release no longer matches its merged source')
-                self.verify_tag(release, state)
-            except Exception as error:
-                invalid.add(release['id'])
-                errors.append(str(error))
-        # Fail closed before changing any mutable channel if provenance verification failed.
-        if invalid:
+        if errors:
             raise RuntimeError('\n'.join(errors))
-        stable = [r for r in self.releases if not r['draft'] and not r['prerelease']
-                  and r['id'] not in self.quarantined and version_key(r['tag_name'])]
-        if not stable:
-            if errors:
-                raise RuntimeError('\n'.join(errors))
+        # Include historical releases as guards; never guess their image provenance.
+        peers = [r for r in self.releases if not r['draft'] and not r['prerelease']
+                 and version_key(r['tag_name'])]
+        peers += [r for r, _ in ready if r not in peers]
+        if not peers:
             return
-        # Elect the highest version for each mutable channel, including legacy releases.
+
         def channel_order(release):
             key = version_key(release['tag_name'])
             state = state_of(release)
-            # Late completion of an older merged PR must not revert newer merged code.
             merged_at = state.get('merged_at') if state else None
             return (key[:3], merged_at or release['published_at'], key[3])
 
         channels = {}
-        for release in stable:
+        for release in peers:
             key = version_key(release['tag_name'])
             for alias in ('latest', str(key[0]), f'{key[0]}.{key[1]}'):
                 if alias not in channels or channel_order(release) > channel_order(channels[alias]):
                     channels[alias] = release
+        active_ids = {r['id'] for r, _ in ready}
         for alias, release in channels.items():
+            if release['id'] not in active_ids:
+                continue
             state = state_of(release)
-            if not state or not state.get('image_digest'):
-                continue  # Never guess provenance of pre-existing releases.
-            try:
-                source = 'docker://' + self.image + '@' + state['image_digest']
-                # Reconcile idempotently from the frozen digest, not a mutable version tag.
-                self.copy_image(source, self.image + ':' + alias)
-                hub = os.environ.get('DOCKERHUB_USERNAME')
-                if hub and not state['simple']:
-                    self.ensure_version_image(source, hub + '/sub2api:' + release['tag_name'][1:],
-                                              state['image_digest'])
-                    self.copy_image(source, hub + '/sub2api:' + alias)
-                if alias == 'latest':
-                    self.sync_version(release['tag_name'][1:])
-                    self.gh.api(f'releases/{release["id"]}', 'PATCH', {'make_latest': 'true'})
-            except Exception as error:
-                errors.append(f'{alias}: {error}')
-        if errors:
-            raise RuntimeError('\n'.join(errors))
-
-        latest = channels['latest']
-        state = state_of(latest)
-        if state:
-            self.notify(latest, state)
-
-    def notify(self, release, state):
-        token = os.environ.get('TELEGRAM_BOT_TOKEN')
-        chat = os.environ.get('TELEGRAM_CHAT_ID')
-        if not token or not chat or state['simple'] or state.get('notified'):
-            return
-        message = (f'Sub2API {release["tag_name"]} 已正式发布（PR #{state["pr"]}）\n'
-                   f'https://github.com/{self.gh.repo}/releases/tag/{release["tag_name"]}\n'
-                   f'docker pull {self.image}:{release["tag_name"][1:]}')
-        request = Request(f'https://api.telegram.org/bot{token}/sendMessage',
-                          data=json.dumps({'chat_id': chat, 'text': message}).encode(),
-                          headers={'Content-Type': 'application/json'}, method='POST')
-        try:
-            with urlopen(request, timeout=30) as response:
-                if not json.loads(response.read()).get('ok'):
-                    raise RuntimeError('Telegram rejected the notification')
-        except Exception:
-            # Do not include the request URL: it contains the bot credential.
-            raise RuntimeError('Formal release notification failed; will retry') from None
-        state['notified'] = True
-        self.save(release, state)
-
-    def sync_version(self, version):
-        path = 'contents/backend/cmd/server/VERSION'
-        current = self.gh.api(path + '?ref=' + quote(self.branch, safe=''))
-        old = base64.b64decode(current['content']).decode().strip()
-        if old == version:
-            return
-        if version_key('v' + old) and version_key('v' + old) > version_key('v' + version):
-            raise RuntimeError('Refusing VERSION downgrade')
-        self.gh.api(path, 'PUT', {
-            'message': f'chore(发布): 同步正式版本 {version} [skip ci]',
-            'content': base64.b64encode((version + '\n').encode()).decode(),
-            'sha': current['sha'], 'branch': self.branch})
+            source = 'docker://' + self.image + '@' + state['image_digest']
+            self.copy_image(source, self.image + ':' + alias)
+            if hub:
+                self.copy_image(source, hub + '/sub2api:' + alias)
+        # Finalize only after all registry steps succeed. Partial success is retried.
+        for release, state in ready:
+            if not state.get('complete') or release['draft'] or release['prerelease']:
+                state['complete'] = True
+                self.save(release, state, draft=False, prerelease=False, make_latest='false')
+        latest = channels.get('latest')
+        if latest and latest['id'] in active_ids:
+            self.gh.api(f'releases/{latest["id"]}', 'PATCH', {'make_latest': 'true'})
 
 
 if __name__ == '__main__':

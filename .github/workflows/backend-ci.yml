@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_call:
     inputs:
+      controller_ref:
+        description: Trusted release controller revision (source checks still use ref)
+        required: false
+        type: string
       ref:
         required: true
         type: string
@@ -23,13 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.controller_ref || inputs.ref || github.sha }}
           persist-credentials: false
       - name: Test release state machine and packaging contracts
         run: |
-          if [ -d tools/release ]; then
-            python3 -m unittest discover -s tools/release -p 'test_*.py' -v
-          fi
+          test -f .github/workflows/release.yml
+          test -f tools/release/merged-only.json
+          python3 -m unittest discover -s tools/release -p 'test_*.py' -v
+      - name: Check the source base version before merge
+        if: github.event_name == 'pull_request'
+        env:
+          SOURCE_BRANCH: ${{ github.head_ref }}
+        run: python3 tools/release/check_version.py "$SOURCE_BRANCH"
 
   shell:
     runs-on: macos-15
@@ -112,6 +121,6 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.13.0
           args: --timeout=30m
           working-directory: backend
