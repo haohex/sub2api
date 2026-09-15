@@ -97,6 +97,7 @@ release/
 !tools/release/
 tools/release/*
 !tools/release/*.py
+!tools/release/merge-sync-main.sh
 !tools/release/merged-only.json
 !tools/release/main-protection.json
 
