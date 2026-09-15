@@ -94,7 +94,7 @@ func cloneGroupMessagesDispatchModelConfig(value OpenAIMessagesDispatchModelConf
 }
 
 func cloneGroupForDuplicate(source *Group, operationID string) *Group {
-	return &Group{
+	duplicate := &Group{
 		Name:                            duplicateGroupName(source.Name, 1),
 		Description:                     source.Description,
 		Platform:                        source.Platform,
@@ -113,6 +113,7 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		DailyLimitUSD:                   cloneGroupValuePointer(source.DailyLimitUSD),
 		WeeklyLimitUSD:                  cloneGroupValuePointer(source.WeeklyLimitUSD),
 		MonthlyLimitUSD:                 cloneGroupValuePointer(source.MonthlyLimitUSD),
+		FiveHourLimitUSD:                cloneGroupValuePointer(source.FiveHourLimitUSD),
 		DefaultValidityDays:             source.DefaultValidityDays,
 		AllowImageGeneration:            source.AllowImageGeneration,
 		AllowBatchImageGeneration:       source.AllowBatchImageGeneration,
@@ -161,6 +162,15 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		MaxReasoningEffortOverLimit: source.MaxReasoningEffortOverLimit,
 		ReasoningEffortMappings:     append([]ReasoningEffortMapping(nil), source.ReasoningEffortMappings...),
 	}
+	if source.QuotaResetSourceAccountID != nil && source.QuotaResetSourceValid {
+		duplicate.QuotaResetSourceAccountID = cloneGroupValuePointer(source.QuotaResetSourceAccountID)
+		duplicate.QuotaResetSourceAccountName = source.QuotaResetSourceAccountName
+		duplicate.QuotaResetSourceResetAt = cloneGroupValuePointer(source.QuotaResetSourceResetAt)
+		duplicate.QuotaResetIncludeMonthly = source.QuotaResetIncludeMonthly
+		duplicate.QuotaResetConfigVersion = source.QuotaResetConfigVersion
+		duplicate.QuotaResetSourceValid = true
+	}
+	return duplicate
 }
 
 // RecoverDuplicateGroup performs a read-only lookup for a copy that was already

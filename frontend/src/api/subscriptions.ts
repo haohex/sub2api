@@ -6,6 +6,11 @@
 import { apiClient } from './client'
 import type { UserSubscription, SubscriptionProgress } from '@/types'
 
+export interface SubscriptionProgressInfo {
+  subscription: UserSubscription
+  progress: SubscriptionProgress
+}
+
 /**
  * Subscription summary for user dashboard
  */
@@ -42,8 +47,8 @@ export async function getActiveSubscriptions(): Promise<UserSubscription[]> {
 /**
  * Get progress for all user's active subscriptions
  */
-export async function getSubscriptionsProgress(): Promise<SubscriptionProgress[]> {
-  const response = await apiClient.get<SubscriptionProgress[]>('/subscriptions/progress')
+export async function getSubscriptionsProgress(): Promise<SubscriptionProgressInfo[]> {
+  const response = await apiClient.get<SubscriptionProgressInfo[]>('/subscriptions/progress')
   return response.data
 }
 
