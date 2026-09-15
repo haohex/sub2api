@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 TAG = re.compile(r'^v(\d+)\.(\d+)\.(\d+)-hao\.(\d+)$')
 SHA = re.compile(r'^[a-f0-9]{40}$')
-MARKER = re.compile(r'<!-- sub2api-release-v1\n(.*?)\n-->', re.S)
+MARKER = re.compile(r'<!-- sub2api-release-v1\r?\n(.*?)\r?\n-->', re.S)
 
 
 class GitHubError(RuntimeError):
@@ -61,6 +61,8 @@ def digest_file(path):
 def state_of(release):
     match = MARKER.search(release.get('body') or '')
     if not match:
+        if '<!-- sub2api-release-v1' in (release.get('body') or ''):
+            raise ValueError('Invalid managed release metadata marker')
         return None
     state = json.loads(match[1])
     if not isinstance(state, dict):
@@ -299,10 +301,13 @@ class Reconciler:
                 continue
             matches = [(r, s) for r, s in known if s['pr'] == pr['number']]
             if matches:
-                if len(matches) != 1 or not self.same_source(matches[0][1], pr):
+                if any(not self.same_source(state, pr) for _, state in matches):
                     raise RuntimeError('Merged PR release identity changed')
-                if not matches[0][1].get('ready') and matches[0] not in candidates:
-                    candidates.append(matches[0])
+                # Historical parser failures may have allocated multiple versions.
+                # Keep every reservation and frozen bundle; never allocate another.
+                for match in matches:
+                    if not match[1].get('ready') and match not in candidates:
+                        candidates.append(match)
                 continue
             sha = self.source(pr)
             candidates.append((None, dict(schema=2, pr=pr['number'], sha=sha,
