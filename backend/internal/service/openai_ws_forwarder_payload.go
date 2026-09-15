@@ -274,7 +274,11 @@ func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []by
 		payload = setCodexWSClientMetadataString(payload, codexWSStreamRequestStartKey,
 			strconv.FormatInt(time.Now().UnixMilli(), 10))
 	}
-	payload = rewriteCodexEnvironmentTimezoneWithName(codexWireTimezoneName(account), payload)
+	timezone := codexWireTimezoneName(account)
+	payload = rewriteCodexEnvironmentTimezoneWithName(timezone, payload)
+	// 与 HTTP 两条路径同一条规则：web_search 的 user_location 跟着出口走
+	// （openai_codex_wire_user_location.go）。
+	payload = rewriteCodexWebSearchUserLocationWith(account, timezone, payload)
 	return reorderCodexTopLevelFields(payload, codexWSCreateFieldOrder)
 }
 

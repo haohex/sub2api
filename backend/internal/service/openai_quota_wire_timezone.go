@@ -83,14 +83,14 @@ func (s *OpenAIQuotaService) refreshCodexWireTimezone(ctx context.Context, accou
 			slog.Warn("codex_wire_timezone_proxy_failed", "account_id", accountID, "error", err)
 			return
 		}
-		exitIP, timezone, err := s.lookupCodexWireTimezone(ctx, proxyURL)
+		exit, err := s.lookupCodexWireTimezone(ctx, proxyURL)
 		if err != nil {
 			slog.Warn("codex_wire_timezone_lookup_failed", "account_id", accountID, "error", err)
 			return
 		}
-		updates := codexWireTimezoneExtraUpdates(codexWireTimezoneProxyTag(account), exitIP, timezone, now)
+		updates := codexWireTimezoneExtraUpdates(codexWireTimezoneProxyTag(account), exit, now)
 		if updates == nil {
-			slog.Warn("codex_wire_timezone_lookup_invalid", "account_id", accountID, "timezone", timezone)
+			slog.Warn("codex_wire_timezone_lookup_invalid", "account_id", accountID, "timezone", exit.timezone)
 			return
 		}
 		if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
@@ -98,56 +98,77 @@ func (s *OpenAIQuotaService) refreshCodexWireTimezone(ctx context.Context, accou
 			return
 		}
 		slog.Info("codex_wire_timezone_resolved",
-			"account_id", accountID, "timezone", timezone, "exit_ip", exitIP)
+			"account_id", accountID, "timezone", exit.timezone, "exit_ip", exit.ip,
+			"city", exit.city, "region", exit.region, "country", exit.country)
 	}()
 }
 
-// lookupCodexWireTimezone 经账号代理查一次出口 IP 与其归属时区。
-func (s *OpenAIQuotaService) lookupCodexWireTimezone(ctx context.Context, proxyURL string) (string, string, error) {
+// codexWireExit 是一次出口解析的结果。地理三项供 web_search 的 user_location 对齐
+// （openai_codex_wire_user_location.go），和时区来自同一个响应，绝不会互相错配。
+type codexWireExit struct {
+	ip       string
+	timezone string
+	city     string
+	region   string
+	country  string
+}
+
+// lookupCodexWireTimezone 经账号代理查一次出口 IP、归属时区与大致地理位置。
+func (s *OpenAIQuotaService) lookupCodexWireTimezone(ctx context.Context, proxyURL string) (codexWireExit, error) {
 	client, err := s.privacyClientFactory(proxyURL)
 	if err != nil {
-		return "", "", err
+		return codexWireExit{}, err
 	}
 	var errs []error
 	for _, url := range codexWireTimezoneLookupURLs {
-		ip, timezone, err := lookupCodexWireTimezoneAt(ctx, client, url)
+		exit, err := lookupCodexWireTimezoneAt(ctx, client, url)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		return ip, timezone, nil
+		return exit, nil
 	}
 	if len(errs) == 0 {
 		// 名单被改空：errors.Join 会返回 nil，调用方就把"什么都没查"当成查到了空时区。
-		return "", "", errors.New("no exit timezone lookup endpoint configured")
+		return codexWireExit{}, errors.New("no exit timezone lookup endpoint configured")
 	}
-	return "", "", errors.Join(errs...)
+	return codexWireExit{}, errors.Join(errs...)
 }
 
-func lookupCodexWireTimezoneAt(ctx context.Context, client *req.Client, url string) (string, string, error) {
+func lookupCodexWireTimezoneAt(ctx context.Context, client *req.Client, url string) (codexWireExit, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, codexWireTimezoneLookupTimeout)
 	defer cancel()
 	var payload struct {
 		IP       string `json:"ip"`
 		Timezone string `json:"timezone"`
+		City     string `json:"city"`
+		Region   string `json:"region"`
+		Country  string `json:"country"`
 	}
 	resp, err := client.R().
 		SetContext(lookupCtx).
 		SetSuccessResult(&payload).
 		Get(url)
 	if err != nil {
-		return "", "", err
+		return codexWireExit{}, err
 	}
 	if !resp.IsSuccessState() {
-		return "", "", fmt.Errorf("exit timezone lookup returned %d", resp.StatusCode)
+		return codexWireExit{}, fmt.Errorf("exit timezone lookup returned %d", resp.StatusCode)
 	}
 	// 200 但没有时区，等同失败，否则会吃掉后面那条兜底。这条守卫救的是能解析成
 	// 功却无值的响应：`{}`、ipinfo 对私有地址返回的 bogon 体、以及任何缺 timezone
 	// 的 200 JSON——空体和 HTML 错误页在上面的反序列化就已经报错了。
-	// 只判时区：exit IP 仅写进 extra 供人工排查，不参与改写判定。
+	// 只判时区：exit IP 仅写进 extra 供人工排查；地理三项缺失只是不改写 user_location，
+	// 不能让整条查询失败——时区才是这次查询的目的，为地理去打第二家反而放大暴露面。
 	timezone := strings.TrimSpace(payload.Timezone)
 	if timezone == "" {
-		return "", "", fmt.Errorf("exit timezone lookup returned no timezone")
+		return codexWireExit{}, fmt.Errorf("exit timezone lookup returned no timezone")
 	}
-	return strings.TrimSpace(payload.IP), timezone, nil
+	return codexWireExit{
+		ip:       strings.TrimSpace(payload.IP),
+		timezone: timezone,
+		city:     strings.TrimSpace(payload.City),
+		region:   strings.TrimSpace(payload.Region),
+		country:  strings.TrimSpace(payload.Country),
+	}, nil
 }

@@ -76,11 +76,11 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 			primary: {body: `{"ip":"24.120.102.167","timezone":"America/Los_Angeles"}`},
 		}, &seen)
 
-		ip, tz, err := svc.lookupCodexWireTimezone(context.Background(), "")
+		exit, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 		require.NoError(t, err)
-		require.Equal(t, "24.120.102.167", ip)
-		require.Equal(t, "America/Los_Angeles", tz)
+		require.Equal(t, "24.120.102.167", exit.ip)
+		require.Equal(t, "America/Los_Angeles", exit.timezone)
 		require.Equal(t, []string{primary}, seen, "第一家成功就不该再打第二家")
 	})
 
@@ -90,11 +90,11 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 			fallback: {body: `{"ip":"2001:57a:f200:b900::323","timezone":"America/Los_Angeles"}`},
 		}, &seen)
 
-		ip, tz, err := svc.lookupCodexWireTimezone(context.Background(), "")
+		exit, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 		require.NoError(t, err)
-		require.Equal(t, "2001:57a:f200:b900::323", ip)
-		require.Equal(t, "America/Los_Angeles", tz)
+		require.Equal(t, "2001:57a:f200:b900::323", exit.ip)
+		require.Equal(t, "America/Los_Angeles", exit.timezone)
 		require.Equal(t, []string{primary, fallback}, seen)
 	})
 
@@ -119,10 +119,10 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 					fallback: {body: `{"ip":"2001:db8::1","timezone":"America/New_York"}`},
 				}, &seen)
 
-				_, tz, err := svc.lookupCodexWireTimezone(context.Background(), "")
+				exit, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 				require.NoError(t, err)
-				require.Equal(t, "America/New_York", tz)
+				require.Equal(t, "America/New_York", exit.timezone)
 				require.Equal(t, []string{primary, fallback}, seen)
 			})
 		}
@@ -138,10 +138,10 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 				fallback: {body: `{"ip":"2001:db8::1","timezone":"America/Denver"}`},
 			}, &seen)
 
-			_, tz, err := svc.lookupCodexWireTimezone(context.Background(), "")
+			exit, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 			require.NoError(t, err, body)
-			require.Equal(t, "America/Denver", tz, body)
+			require.Equal(t, "America/Denver", exit.timezone, body)
 			require.Equal(t, []string{primary, fallback}, seen, body)
 		}
 	})
@@ -153,18 +153,18 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 			primary: {body: `{"timezone":"America/Chicago"}`},
 		}, &seen)
 
-		ip, tz, err := svc.lookupCodexWireTimezone(context.Background(), "")
+		exit, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 		require.NoError(t, err)
-		require.Empty(t, ip)
-		require.Equal(t, "America/Chicago", tz)
+		require.Empty(t, exit.ip)
+		require.Equal(t, "America/Chicago", exit.timezone)
 	})
 
 	t.Run("两家都失败时错误要都带上", func(t *testing.T) {
 		var seen []string
 		svc := wireTimezoneLookupService(t, nil, &seen)
 
-		_, _, err := svc.lookupCodexWireTimezone(context.Background(), "")
+		_, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), primary)
@@ -180,7 +180,7 @@ func TestLookupCodexWireTimezoneFallsBackToIPv6Endpoint(t *testing.T) {
 		var seen []string
 		svc := wireTimezoneLookupService(t, nil, &seen)
 
-		_, _, err := svc.lookupCodexWireTimezone(context.Background(), "")
+		_, err := svc.lookupCodexWireTimezone(context.Background(), "")
 
 		require.Error(t, err)
 		require.Empty(t, seen)
