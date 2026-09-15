@@ -157,6 +157,74 @@ class ReconcileTests(unittest.TestCase):
     def test_ready_release_is_not_allocated_again(self):
         self.assertEqual(self.plan(FakeGitHub([pr()], [release(ready=True)]))['work'], 'false')
 
+    def test_release_metadata_accepts_lf_crlf_and_mixed_newlines(self):
+        for opening, closing in [('\n', '\n'), ('\r\n', '\r\n'), ('\r\n', '\n')]:
+            with self.subTest(opening=opening, closing=closing):
+                item = release(ready=True, stable=True)
+                item['body'] = item['body'].replace('sub2api-release-v1\n',
+                                                    'sub2api-release-v1' + opening).replace('\n-->', closing + '-->')
+                gh = FakeGitHub([pr()], [item])
+                self.assertEqual(self.plan(gh)['work'], 'false')
+                self.assertFalse(any(method != 'GET' for _, method, _ in gh.calls))
+
+    def test_malformed_managed_marker_is_not_treated_as_unmanaged(self):
+        item = release(stable=True)
+        item['body'] = item['body'].replace('\n-->', '')
+        gh = FakeGitHub([pr()])
+        gh.releases = [item]
+        with self.assertRaisesRegex(RuntimeError, 'Invalid published release'):
+            self.plan(gh)
+        self.assertFalse(any(method != 'GET' for _, method, _ in gh.calls))
+
+    def test_duplicate_completed_releases_allow_next_pr_without_rewriting_history(self):
+        items = [release(n, ready=True, stable=True) for n in (23, 24, 25)]
+        for item in items[:2]:
+            item['body'] = item['body'].replace('\n', '\r\n')
+        original = copy.deepcopy(items)
+        next_pr = dict(pr(18), merged_at='2026-09-13T10:00:00Z')
+        gh = FakeGitHub([next_pr, pr()], items)
+        self.assertEqual(self.plan(gh)['tag'], 'v0.2.4-hao.26')
+        self.assertEqual(state_of(gh.releases[-1])['pr'], 18)
+        self.assertEqual(gh.releases[:3], original)
+        self.assertEqual(self.plan(gh)['tag'], 'v0.2.4-hao.26')
+        self.assertEqual(len(gh.releases), 4)
+
+    def test_duplicate_releases_still_reject_changed_source(self):
+        for changed in [dict(sha=HEAD), dict(tree=OTHER)]:
+            with self.subTest(changed=changed):
+                gh = FakeGitHub([pr()], [release(23, ready=True), release(24, **changed)])
+                with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+                    self.plan(gh)
+                self.assertFalse(any(method != 'GET' for _, method, _ in gh.calls))
+
+    def test_duplicate_unfinished_release_keeps_its_frozen_bundle(self):
+        gh = FakeGitHub([pr()], [release(23, ready=True, stable=True),
+                                release(24, bundle_run=99, files={'image.tar': 'f' * 64})])
+        gh.artifacts = [{'name': 'v0.2.4-hao.24', 'expired': False}]
+        result = self.plan(gh)
+        self.assertEqual(result['tag'], 'v0.2.4-hao.24')
+        self.assertEqual(result['bundle_run'], '99')
+        self.assertEqual(result['build'], 'false')
+        self.assertEqual(len(gh.releases), 2)
+        gh.artifacts = []
+        with self.assertRaisesRegex(RuntimeError, 'Frozen artifact unavailable'):
+            self.plan(gh)
+
+    @patch.object(Reconciler, 'copy_image')
+    def test_crlf_duplicate_releases_use_merge_time_for_latest(self, copy_image):
+        older = [release(n, ready=True, stable=True, image_digest=DIGEST) for n in (23, 24, 25)]
+        for item in older[:2]:
+            item['body'] = item['body'].replace('\n', '\r\n')
+            item['published_at'] = '2026-09-14T10:00:00Z'
+        newer_pr = dict(pr(6), merged_at='2026-09-13T10:00:00Z')
+        newer = release(22, ready=True, stable=True, pr=6, image_digest=DIGEST,
+                        merged_at=newer_pr['merged_at'])
+        gh = FakeGitHub([pr(), newer_pr], older + [newer])
+        with patch.object(Reconciler, 'verify_platforms'), patch.object(Reconciler, 'ensure_version_image'):
+            Reconciler(gh).promote()
+        self.assertEqual([path for path, _, data in gh.calls if data == {'make_latest': 'true'}],
+                         ['releases/22'])
+
     def test_orphan_successful_build_is_reused_before_any_publish(self):
         gh = FakeGitHub([pr()], [release(build_run=99)])
         gh.artifacts = [{'name': 'v0.2.4-hao.10', 'expired': False}]
