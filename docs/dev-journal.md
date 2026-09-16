@@ -1,5 +1,14 @@
 # 开发日志
 
+## 2026-09-16：停用并移除 Fork CLA 流程（关联 PR #21）
+
+- 原因：KlN Release 同步 PR 携带多位上游作者的提交，CLA Assistant 将他们视为本 Fork 的待签署贡献者，批量提及并引发不必要的签署回复。
+- 已在线停用 CLA Assistant；检查时没有未完成运行，main 的必需检查不包含 CLA，仓库没有 CLA 专用 Actions secret 或 variable。
+- 删除 CLA 工作流及协议文档，一并移除签名检查、评论触发重查和合并后锁定讨论逻辑；贡献约定明确后续同步保留删除，不重新引入该流程。LICENSE 和版权声明不变。
+- 已删除远端 `cla-signatures` 分支；API 回读确认分支不存在、工作流状态为 `disabled_manually`。历史 PR 评论不修改。
+- 验证：`git diff --check` 通过；全仓 CLA 引用仅剩开发日志及停用约定。本次只删除工作流和文档，不涉及应用代码，未运行应用测试。
+- `docs/conventions/codex-outbound-identity.md` 仍缺失，本次仅清理贡献自动化，不涉及协议代码。
+
 ## 2026-09-15：KlN 同步分支自动合入 main（关联 PR #18、Issue #13）
 
 - 根因：从上游 tag 建分支且已有同步 PR 时直接跳过，与 main 的 strict 更新要求组合后，每次都需要手动 merge main。
