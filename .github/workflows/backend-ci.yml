@@ -3,15 +3,50 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      controller_ref:
+        description: Trusted release controller revision (source checks still use ref)
+        required: false
+        type: string
+      ref:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  release-automation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.controller_ref || inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Test release state machine and packaging contracts
+        run: |
+          test -f .github/workflows/release.yml
+          test -f tools/release/merged-only.json
+          python3 -m unittest discover -s tools/release -p 'test_*.py' -v
+      - name: Check the source base version before merge
+        if: github.event_name == 'pull_request'
+        env:
+          SOURCE_BRANCH: ${{ github.head_ref }}
+        run: python3 tools/release/check_version.py "$SOURCE_BRANCH"
+
   shell:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - name: Check deployment scripts
         run: |
           /bin/bash -n deploy/apple-container.sh
@@ -25,6 +60,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
@@ -45,6 +83,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -65,6 +106,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
@@ -77,6 +121,6 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.13.0
           args: --timeout=30m
           working-directory: backend
