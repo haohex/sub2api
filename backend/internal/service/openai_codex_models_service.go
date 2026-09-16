@@ -1074,7 +1074,7 @@ func groupCodexModelSupportsImageInput(
 			return false
 		}
 	}
-	if platform != PlatformOpenAI && platform != PlatformGrok {
+	if platform != PlatformOpenAI && platform != PlatformGrok && platform != PlatformDeepseek {
 		return false
 	}
 
@@ -1213,7 +1213,7 @@ func accountCodexModelSupportsImageInput(account *Account, upstreamModel string)
 		return false
 	}
 	switch account.Platform {
-	case PlatformOpenAI:
+	case PlatformOpenAI, PlatformDeepseek:
 		if metadata, ok := account.GetUpstreamModelMetadata(upstreamModel); ok {
 			if modalities := normalizeCodexInputModalities(metadata.InputModalities); len(modalities) > 0 {
 				// Official GPT-6 Astra metadata briefly shipped with a stale
@@ -1226,7 +1226,10 @@ func accountCodexModelSupportsImageInput(account *Account, upstreamModel string)
 				return stringSliceContains(modalities, "image")
 			}
 		}
-		if !isOpenAICodexImageInputModel(upstreamModel) {
+		if strings.EqualFold(strings.TrimSpace(upstreamModel), "deepseek-v4-flash-vision-exp") {
+			return account.Type == AccountTypeAPIKey
+		}
+		if account.Platform != PlatformOpenAI || !isOpenAICodexImageInputModel(upstreamModel) {
 			return false
 		}
 		if account.IsOpenAIOAuth() {
@@ -1719,6 +1722,21 @@ func (s *OpenAIGatewayService) buildCodexModelsManifestRequest(ctx context.Conte
 		authToken = strings.TrimSpace(credAccount.GetOpenAIApiKey())
 		if authToken == "" {
 			return openAIModelsRequest{}, nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_API_KEY_MISSING", "account has no API key for the Codex models upstream")
+		}
+		normalizedBaseURL, validateErr := s.validateUpstreamBaseURL(baseURL)
+		if validateErr != nil {
+			return openAIModelsRequest{}, nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_API_KEY_UPSTREAM_INVALID", "invalid Codex models upstream base URL: %v", validateErr)
+		}
+		requestEndpoint = normalizedBaseURL
+		useAPIKeyUpstream = true
+		appendModelsPath = true
+	case credAccount.IsCPR():
+		// Codex CLI 启动的第一条请求就是模型目录；不接的话纯 cpr 分组直接起不来。
+		// CPR 有 GET /v1/models（openai/router.rs:25），形状与 API key 一路相同。
+		baseURL := credAccount.GetCPRGatewayBaseURL()
+		authToken = credAccount.GetCPRClientKey()
+		if baseURL == "" || authToken == "" {
+			return openAIModelsRequest{}, nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_API_KEY_MISSING", "cpr account is missing base_url or client key")
 		}
 		normalizedBaseURL, validateErr := s.validateUpstreamBaseURL(baseURL)
 		if validateErr != nil {

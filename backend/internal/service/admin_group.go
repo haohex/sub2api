@@ -294,6 +294,8 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return ids
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
+	case PlatformOpenCodeGo:
+		return DefaultOpenCodeGoModelIDs()
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
 	default:
@@ -314,7 +316,7 @@ func defaultAllowImageGenerationForPlatform(platform string) bool {
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -340,6 +342,41 @@ func groupSupportsOAuthOnlyFilter(platform string) bool {
 		platform == PlatformGemini ||
 		platform == PlatformGrok ||
 		platform == PlatformComposite
+}
+
+// filterOAuthOnlyGroupAccounts 按 require_oauth_only 过滤待绑定账号，保持入参顺序。
+// CreateGroup 与 UpdateGroup 共用：两处原本是逐字重复的副本，改谓词时漏掉一处就能
+// 让 PUT /admin/groups/:id 绕过限制。抽成一处后不可能再分叉。
+func (s *adminServiceImpl) filterOAuthOnlyGroupAccounts(ctx context.Context, group *Group, accountIDs []int64) ([]int64, error) {
+	if group == nil || !group.RequireOAuthOnly || !groupSupportsOAuthOnlyFilter(group.Platform) || len(accountIDs) == 0 {
+		return accountIDs, nil
+	}
+	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
+	}
+	allowed := make(map[int64]struct{}, len(accounts))
+	for _, acc := range accounts {
+		if accountAllowedInOAuthOnlyGroup(acc.Type) {
+			allowed[acc.ID] = struct{}{}
+		}
+	}
+	var filtered []int64
+	for _, aid := range accountIDs {
+		if _, ok := allowed[aid]; ok {
+			filtered = append(filtered, aid)
+		}
+	}
+	return filtered, nil
+}
+
+// accountAllowedInOAuthOnlyGroup 判定账号类型能否进入 require_oauth_only 分组。
+//
+// 这里刻意维持"黑名单"而非"只放行 OAuth 类"：upstream / bedrock / service_account
+// 历史上一直能进，改成白名单会动到 cpr 之外的既有渠道。cpr 与 apikey 同属
+// 「不是 OAuth 账号」，必须挡住。
+func accountAllowedInOAuthOnlyGroup(accountType string) bool {
+	return accountType != AccountTypeAPIKey && accountType != AccountTypeCPR
 }
 
 func groupSupportsOpenAIFast(platform string) bool {
@@ -494,7 +531,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	// 先归一化（非订阅分组清空高峰配置、清洗停用状态下的脏字段）再校验，与 UpdateGroup 同一收口。
 	peakRateEnabled, peakStart, peakEnd, peakRateMultiplier := NormalizePeakRateConfig(subscriptionType, input.PeakRateEnabled, input.PeakStart, input.PeakEnd, peakRateMultiplier)
 	if err := ValidatePeakRateConfig(subscriptionType, peakRateEnabled, peakStart, peakEnd, peakRateMultiplier); err != nil {
-		return nil, err
+		return nil, infraerrors.BadRequest("INVALID_PEAK_RATE_CONFIG", err.Error())
 	}
 
 	profitMinMargin := 0.0
@@ -656,25 +693,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, err
 	}
 
-	// require_oauth_only: 过滤掉 apikey 类型账号
-	if group.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(group.Platform) && len(accountIDsToCopy) > 0 {
-		accounts, err := s.accountRepo.GetByIDs(ctx, accountIDsToCopy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
-		}
-		oauthIDs := make(map[int64]struct{}, len(accounts))
-		for _, acc := range accounts {
-			if acc.Type != AccountTypeAPIKey {
-				oauthIDs[acc.ID] = struct{}{}
-			}
-		}
-		var filtered []int64
-		for _, aid := range accountIDsToCopy {
-			if _, ok := oauthIDs[aid]; ok {
-				filtered = append(filtered, aid)
-			}
-		}
-		accountIDsToCopy = filtered
+	accountIDsToCopy, err = s.filterOAuthOnlyGroupAccounts(ctx, group, accountIDsToCopy)
+	if err != nil {
+		return nil, err
 	}
 
 	// 如果有需要复制的账号，绑定到新分组
@@ -957,7 +978,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	// 防止单独修改 start/end 导致最终 start>=end 等非法配置入库。与 CreateGroup 同一收口。
 	group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier = NormalizePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier)
 	if err := ValidatePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier); err != nil {
-		return nil, err
+		return nil, infraerrors.BadRequest("INVALID_PEAK_RATE_CONFIG", err.Error())
 	}
 	if input.ProfitControlEnabled != nil {
 		group.ProfitControlEnabled = *input.ProfitControlEnabled
@@ -1188,25 +1209,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, fmt.Errorf("failed to clear existing account bindings: %w", err)
 		}
 
-		// require_oauth_only: 过滤掉 apikey 类型账号
-		if group.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(group.Platform) && len(accountIDsToCopy) > 0 {
-			accounts, err := s.accountRepo.GetByIDs(ctx, accountIDsToCopy)
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
-			}
-			oauthIDs := make(map[int64]struct{}, len(accounts))
-			for _, acc := range accounts {
-				if acc.Type != AccountTypeAPIKey {
-					oauthIDs[acc.ID] = struct{}{}
-				}
-			}
-			var filtered []int64
-			for _, aid := range accountIDsToCopy {
-				if _, ok := oauthIDs[aid]; ok {
-					filtered = append(filtered, aid)
-				}
-			}
-			accountIDsToCopy = filtered
+		accountIDsToCopy, err = s.filterOAuthOnlyGroupAccounts(ctx, group, accountIDsToCopy)
+		if err != nil {
+			return nil, err
 		}
 
 		// 再绑定源分组的账号

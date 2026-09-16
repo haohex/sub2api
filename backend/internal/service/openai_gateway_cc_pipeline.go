@@ -142,6 +142,11 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) (string, error) {
 	baseURL := account.GetOpenAIBaseURL()
 	if baseURL == "" {
+		// 用 Type 而非 IsCPR()：理由同 GetOpenAIBaseURL 的 cpr 早退——平台错配的
+		// cpr 账号在 IsCPR() 下为 false，会静默回落到 api.openai.com。
+		if account.Type == AccountTypeCPR {
+			return "", errors.New("cpr account requires credentials.base_url")
+		}
 		baseURL = "https://api.openai.com"
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
@@ -223,7 +228,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// 账号级请求头覆写：放在所有内置默认头（含 Grok CLI 身份头）之后应用，
 	// 使配置值获得除共享传输层强制头之外的最高优先级。
 	account.ApplyHeaderOverrides(upstreamReq.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

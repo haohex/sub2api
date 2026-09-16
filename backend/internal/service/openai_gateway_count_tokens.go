@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,6 +154,14 @@ func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
 	if account == nil || account.IsGrok() || account.IsCNProvider() || account.Type == AccountTypeUpstream {
 		return true
 	}
+	// CPR 中继：它的路由表（openai/router.rs:21-27）只有 responses / alpha_search /
+	// images / models，**没有 input_tokens**。原来的 `Type != apikey → false` 本意是
+	// "OAuth 走官方端点"，对中继账号是错的——会把 CPR 的 client key 发给 api.openai.com。
+	// 用 Type 而非 IsCPR()：IsCPR() 还要求 platform==openai，平台错配的脏数据
+	// 不该从这里漏回官方端点（下游 buildInputTokensUpstreamRequest 同样按 Type 分流）。
+	if account.Type == AccountTypeCPR {
+		return true
+	}
 	if account.Type != AccountTypeAPIKey {
 		return false
 	}
@@ -264,14 +273,14 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		return fmt.Errorf("count_tokens: missing account")
 	}
 
-	// 国产供应商（全部协议，含 anthropic）：一律本地估算，不发上游请求。
+	// 国产供应商与 OpenCode（全部协议，含 anthropic）：一律本地估算，不发上游请求。
 	// 依据（2026-08 核实）：三家的 Anthropic 兼容层均未提供
 	// /v1/messages/count_tokens——DeepSeek 官方 anthropic_api 文档无此端点
 	// （且注明 anthropic-version 头被忽略），聚合网关 OpenModel 明确标注
 	// count_tokens 为 "Anthropic only"，Kimi/智谱亦无任何文档承诺。转发上游
 	// 只会常态 404，且错误还会流入账号处置逻辑误伤整账号调度；Claude Code
 	// 高频调用此端点，本地 tiktoken 估算是与 Grok 一致的既有方案。
-	if account.IsCNProvider() {
+	if account.IsCNProvider() || account.IsOpenCodeGo() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
 			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
@@ -434,7 +443,8 @@ func (s *OpenAIGatewayService) buildInputTokensUpstreamRequest(
 	token string,
 ) (*http.Request, error) {
 	targetURL := openaiPlatformAPIInputTokensURL
-	if account.Type == AccountTypeAPIKey {
+	switch account.Type {
+	case AccountTypeAPIKey:
 		if baseURL := account.GetOpenAIBaseURL(); strings.TrimSpace(baseURL) != "" {
 			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 			if err != nil {
@@ -442,6 +452,18 @@ func (s *OpenAIGatewayService) buildInputTokensUpstreamRequest(
 			}
 			targetURL = buildOpenAIResponsesInputTokensURL(validatedURL)
 		}
+	case AccountTypeCPR:
+		// CPR 中继绝不能回落到官方端点：client key 只对 CPR 网关有效，发给 OpenAI 就是凭据外泄。
+		// 注意不能加无差别 default——oauth / setup-token 合法使用官方 input_tokens 端点。
+		baseURL := account.GetCPRGatewayBaseURL()
+		if baseURL == "" {
+			return nil, errors.New("cpr account requires credentials.base_url")
+		}
+		validatedURL, err := s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return nil, err
+		}
+		targetURL = buildOpenAIResponsesInputTokensURL(validatedURL)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
