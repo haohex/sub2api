@@ -100,3 +100,50 @@ func (h *AccountHandler) GetCodexStateValue(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	response.Success(c, gin.H{"state": state})
 }
+
+func (h *AccountHandler) ImportCodexState(c *gin.Context) {
+	if !h.codexStateServiceReady(c) {
+		return
+	}
+	id, ok := codexStateRequestAccountID(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		Model string `json:"model"`
+		State string `json:"state"`
+	}
+	if c.ShouldBindJSON(&input) != nil || strings.TrimSpace(input.Model) == "" || len(input.State) > 4096 {
+		response.BadRequest(c, "invalid state input")
+		return
+	}
+	result, err := h.codexTurnStateProbe.ImportState(c.Request.Context(), id, strings.TrimSpace(input.Model), input.State)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, gin.H{"result": result})
+}
+func (h *AccountHandler) GetCodexStateEvents(c *gin.Context) {
+	if !h.codexStateServiceReady(c) {
+		return
+	}
+	id, ok := codexStateRequestAccountID(c)
+	if !ok {
+		return
+	}
+	model := strings.TrimSpace(c.Query("model"))
+	before, _ := strconv.ParseInt(c.Query("before"), 10, 64)
+	if model == "" || before < 0 {
+		response.BadRequest(c, "invalid model or cursor")
+		return
+	}
+	items, err := h.codexTurnStateProbe.Events(c.Request.Context(), id, model, before)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, gin.H{"items": items})
+}

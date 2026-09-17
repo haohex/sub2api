@@ -131,7 +131,7 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 
 	// 尾部顺序：upstream_request_id, session_id, native_compaction_v2,
 	// turn_state, turn_state_overridden, turn_state_source, created_at
-	idx := len(prepared.args) - 7
+	idx := len(prepared.args) - 9
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)
@@ -168,7 +168,7 @@ func TestPrepareUsageLogInsert_TurnStateArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	n := len(prepared.args)
+	n := len(prepared.args) - 2
 	// 尾部顺序：... native_compaction_v2, turn_state, turn_state_overridden,
 	// turn_state_source, created_at
 	require.Equal(t, "boolean", usageLogInsertArgTypes[n-5], "native_compaction_v2 必须仍在倒数第 5")

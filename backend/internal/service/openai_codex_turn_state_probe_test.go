@@ -13,7 +13,7 @@ import (
 
 func TestApplyConfiguredCodexTurnState_IsolatedByModelTokenAndTTL(t *testing.T) {
 	now := time.Now()
-	state := strings.Repeat("s", codexTurnStateLength)
+	state := codexTestState("s", codexTurnStateLength)
 	account := &Account{
 		ID:       7,
 		Platform: PlatformOpenAI,
@@ -60,19 +60,8 @@ func TestApplyConfiguredCodexTurnState_IsolatedByModelTokenAndTTL(t *testing.T) 
 	require.Equal(t, "client-state", headers.Get(openAICodexTurnStateHeader), "expired candidates must not be injected")
 }
 
-func TestCodexTurnStateCacheNeedsRefreshFiveMinutesBeforeExpiry(t *testing.T) {
-	now := time.Now()
-	entry := codexTurnStateCacheEntry{
-		ObtainedAt: now,
-		ExpiresAt:  now.Add(codexTurnStateTTL),
-	}
-	require.False(t, codexTurnStateCacheNeedsRefresh(entry, now.Add(54*time.Minute)))
-	require.True(t, codexTurnStateCacheNeedsRefresh(entry, now.Add(55*time.Minute)))
-	require.True(t, codexTurnStateCacheNeedsRefresh(entry, now.Add(59*time.Minute)))
-}
-
 func TestCodexTurnStateProbe_ClosesSSEAfterResponseHeaders(t *testing.T) {
-	state := strings.Repeat("s", codexTurnStateLength)
+	state := codexTestState("s", codexTurnStateLength)
 	body := &passthroughCloseTrackingReadCloser{Reader: strings.NewReader("data: keep-open\n")}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -89,7 +78,11 @@ func TestCodexTurnStateProbe_ClosesSSEAfterResponseHeaders(t *testing.T) {
 	}
 	proxy := &Proxy{ID: 23, Protocol: "http", Host: "proxy.example", Port: 8080, Status: StatusActive}
 
-	got, _, err := service.probeOnce(context.Background(), account, proxy, "token", "gpt-5.5")
+	service.requestDo = func(req *http.Request, _ string) (*http.Response, error) {
+		return upstream.DoWithTLS(req, proxy.URL(), account.ID, account.Concurrency, nil)
+	}
+	result := service.acquireState(context.Background(), account, proxy, "token", "gpt-5.5", "")
+	got, err := result.state, result.err
 	require.NoError(t, err)
 	require.Equal(t, state, got)
 	require.True(t, body.closed, "probe must close the SSE body immediately after headers")
@@ -98,7 +91,7 @@ func TestCodexTurnStateProbe_ClosesSSEAfterResponseHeaders(t *testing.T) {
 
 func TestConfiguredCodexTurnStateOverridesDeviceWireFrame(t *testing.T) {
 	now := time.Now()
-	state := strings.Repeat("s", codexTurnStateLength)
+	state := codexTestState("s", codexTurnStateLength)
 	account := wireProfileTestAccount(true)
 	account.Credentials["plan_type"] = "plus"
 	account.Credentials["model_mapping"] = map[string]any{"gpt-5.5": "gpt-5.5"}

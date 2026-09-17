@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"reflect"
 )
 
 // CodexTurnStateProbeRepository fences background and observation writes against
@@ -72,10 +71,6 @@ func PreserveCodexTurnStateProbeRuntimeForEdit(updated, current *Account) {
 			updated.Extra[key] = value
 		}
 	}
-}
-
-func codexTurnStateProbeRuntimeUnchanged(account *Account, cache map[string]codexTurnStateCacheEntry, failures map[string]codexTurnStateProbeFailure) bool {
-	return reflect.DeepEqual(codexTurnStateCacheFromExtra(account.Extra), cache) && reflect.DeepEqual(codexTurnStateProbeFailuresFromExtra(account.Extra), failures)
 }
 
 // Only credential-owner fields affect candidate identity. Resubmitting model

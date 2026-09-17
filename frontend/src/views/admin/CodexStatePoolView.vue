@@ -23,11 +23,6 @@
       </section>
 
       <div class="flex flex-wrap items-center gap-3">
-        <label class="text-sm" for="state-model">{{ t('admin.accounts.statePool.model') }}</label>
-        <select id="state-model" v-model="modelFilter" class="input w-auto min-w-48">
-          <option value="">{{ t('admin.accounts.statePool.allModels') }}</option>
-          <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
-        </select>
         <input v-model="search" :placeholder="t('admin.accounts.statePool.search')" :aria-label="t('admin.accounts.statePool.search')" class="input w-full sm:w-64" />
         <span class="text-sm text-gray-500">{{ t('admin.accounts.statePool.summary', { valid: validCount, total: visibleRows.length }) }}</span>
         <button class="btn btn-secondary ml-auto" :disabled="loading" @click="loadPool">{{ t('admin.accounts.statePool.reload') }}</button>
@@ -36,15 +31,17 @@
       <div v-if="!pool && loading" class="py-16 text-center text-gray-500">{{ t('common.loading') }}</div>
       <div v-else-if="!visibleRows.length" class="rounded-xl border border-dashed border-gray-300 p-12 text-center text-sm text-gray-500 dark:border-dark-600">
         {{ t('admin.accounts.statePool.empty') }}
-        <button v-if="modelFilter" class="mt-3 block w-full text-primary-600 hover:underline" @click="modelFilter = ''">{{ t('admin.accounts.statePool.allModels') }}</button>
       </div>
       <div v-else class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <article v-for="row in visibleRows" :key="rowKey(row)" class="min-w-0 rounded-xl border border-l-4 bg-white p-5 shadow-sm dark:bg-dark-800" :class="isValid(row) ? 'border-gray-200 border-l-emerald-500 dark:border-dark-600 dark:border-l-emerald-500' : 'border-gray-200 border-l-amber-500 dark:border-dark-600 dark:border-l-amber-500'">
+        <article v-for="row in visibleRows" :key="row.account_id" class="min-w-0 rounded-xl border border-l-4 bg-white p-5 shadow-sm dark:bg-dark-800" :class="isValid(row) ? 'border-gray-200 border-l-emerald-500 dark:border-dark-600 dark:border-l-emerald-500' : 'border-gray-200 border-l-amber-500 dark:border-dark-600 dark:border-l-amber-500'">
           <div class="flex flex-wrap items-start justify-between gap-2">
-            <h2 class="break-all font-mono text-base font-semibold">{{ row.model }}</h2>
+            <h2 class="break-all text-base font-semibold">#{{ row.account_id }} · {{ row.account_name }}</h2>
+            <select :disabled="importing" :value="row.model" class="input w-full font-mono" :aria-label="t('admin.accounts.statePool.model')" @change="selectModel(row.account_id, ($event.target as HTMLSelectElement).value)">
+              <option v-for="model in accountModels(row.account_id)" :key="model" :value="model">{{ model }}</option>
+            </select>
             <span class="rounded px-2 py-1 text-xs font-medium" :class="isValid(row) ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'">{{ stateLabel(row) }}</span>
           </div>
-          <p class="mt-2 truncate text-sm text-gray-500" :title="row.account_name">#{{ row.account_id }} · {{ row.account_name }}</p>
+
           <p class="mt-1 text-xs text-gray-500">{{ row.plan || t('admin.accounts.statePool.unknownPlan') }} · {{ t('admin.accounts.statePool.expectedLength', { length: row.expected_length || '—' }) }}</p>
 
           <div class="mt-5 rounded-lg bg-gray-50 p-3 dark:bg-dark-900/60">
@@ -53,6 +50,8 @@
               <span class="font-mono font-semibold tabular-nums">{{ remainingLabel(row) }}</span>
             </div>
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600"><div class="h-full rounded-full bg-emerald-500 transition-all" :style="{ width: `${remainingPercent(row)}%` }" /></div>
+            <p class="mt-2 text-xs text-gray-500">{{ t('admin.accounts.statePool.issuedAt') }} {{ formatTime(row.issued_at) }}</p>
+            <p class="mt-1 text-xs text-gray-500">{{ t('admin.accounts.statePool.obtainedAt') }} {{ formatTime(row.obtained_at) }}</p>
             <p class="mt-2 text-xs text-gray-500">{{ t('admin.accounts.statePool.expiresAt') }} {{ formatTime(row.expires_at) }}</p>
           </div>
 
@@ -62,13 +61,35 @@
             <p class="text-gray-500">{{ t('admin.accounts.statePool.rawHint') }}</p>
           </div>
           <div class="mt-4 min-h-14 space-y-1 text-xs text-gray-500">
-            <p>{{ probeLabel(row) }}<span v-if="row.attempts > 0"> · {{ row.attempts }}/25</span></p>
+            <p>{{ probeLabel(row) }} · {{ modeLabel(row.mode) }}<span v-if="row.attempts > 0"> · #{{ row.attempts }}</span></p>
+            <p>{{ t('admin.accounts.statePool.nextProbe') }} {{ formatTime(row.next_probe_at) }}</p>
             <p>{{ t('admin.accounts.statePool.lastAttempt') }} {{ formatTime(row.last_attempt_at) }}</p>
             <p v-if="row.reason" class="text-amber-600 dark:text-amber-400">{{ reasonLabel(row.reason) }}</p>
           </div>
           <div class="mt-4 flex flex-wrap justify-between gap-2">
             <button class="btn btn-secondary btn-sm" :disabled="!isValid(row) || copying === rowKey(row)" @click="copyState(row)">{{ t('admin.accounts.statePool.copy') }}</button>
             <button class="btn btn-primary btn-sm" :disabled="!row.can_refresh || refreshing.has(rowKey(row))" @click="queueRefresh(row)">{{ t('admin.accounts.statePool.refresh') }}</button>
+          </div>
+          <button class="btn btn-secondary btn-sm mt-3" :disabled="importing || !row.can_refresh" @click="openImport(row)">{{ t('admin.accounts.statePool.paste') }}</button>
+          <div v-if="importKey === rowKey(row)" class="mt-3 space-y-2">
+            <textarea v-model="pastedState" :disabled="importing" class="input min-h-24 font-mono text-xs" autocomplete="off" spellcheck="false" :aria-label="t('admin.accounts.statePool.paste')" maxlength="4096" />
+            <p class="text-xs">{{ t('admin.accounts.statePool.inputLength', { length: pastedState.trim().length }) }}</p>
+            <p v-if="importError" role="alert" class="text-sm text-red-600">{{ importError }}</p>
+            <button class="btn btn-primary btn-sm" :disabled="importing || !pastedState.trim()" @click="submitImport(row)">{{ t('admin.accounts.statePool.validateReplace') }}</button>
+            <button class="btn btn-secondary btn-sm ml-2" :disabled="importing" @click="closeImport">{{ t('common.cancel') }}</button>
+          </div>
+          <button class="mt-4 text-sm text-primary-600" @click="toggleLogs(row)">{{ t('admin.accounts.statePool.logs') }}</button>
+          <div v-if="logsOpen.has(row.account_id)" class="mt-2 max-h-80 space-y-3 overflow-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-900/60">
+            <p v-if="logErrors[rowKey(row)]" role="alert">{{ t('admin.accounts.statePool.loadLogsFailed') }}</p>
+            <p v-else-if="!events[rowKey(row)]?.length">{{ t('admin.accounts.statePool.noLogs') }}</p>
+            <div v-for="event in events[rowKey(row)] || []" :key="event.id" class="border-b border-gray-200 pb-2 dark:border-dark-600">
+              <p>{{ formatTime(event.created_at) }} · {{ eventLabel(event.kind) }} · {{ event.source }} · #{{ event.attempt }}</p>
+              <p>{{ reasonLabel(event.reason) }}</p>
+              <p>{{ t('admin.accounts.statePool.sent') }} {{ event.sent_length }} → {{ t('admin.accounts.statePool.returned') }} {{ event.returned_length }} · HTTP {{ event.http_status || '—' }} · {{ event.duration_ms }} ms</p>
+              <p v-if="event.proxy_id">{{ event.proxy_name }} #{{ event.proxy_id }} · {{ event.proxy_address }}</p>
+              <p v-if="event.proxy_id">{{ t('admin.accounts.statePool.referenceIP') }}: {{ event.reference_ip || t('admin.accounts.statePool.ipUnknown') }} · {{ event.ip_status }}</p>
+            </div>
+            <button v-if="hasMore[rowKey(row)]" class="text-primary-600" @click="loadEvents(row, true)">{{ t('admin.accounts.statePool.moreLogs') }}</button>
           </div>
         </article>
       </div>
@@ -84,7 +105,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
 import { getAll as getProxies } from '@/api/admin/proxies'
-import { getStatePool, saveStatePoolProxy, refreshState, getStateValue, type StatePoolRow, type StatePoolResponse } from '@/api/admin/codexStatePool'
+import { getStatePool, saveStatePoolProxy, refreshState, getStateValue, getStateEvents, importState, type StateEvent, type StatePoolRow, type StatePoolResponse } from '@/api/admin/codexStatePool'
 import type { Proxy } from '@/types'
 
 const { t } = useI18n()
@@ -93,7 +114,15 @@ const { copyToClipboard } = useClipboard()
 const pool = ref<StatePoolResponse | null>(null)
 const proxies = ref<Proxy[]>([])
 const proxyId = ref<number | null>(null)
-const modelFilter = ref('gpt-6-astra')
+const selectedModels = ref<Record<number, string>>({})
+const events = ref<Record<string, StateEvent[]>>({})
+const logsOpen = ref(new Set<number>())
+const hasMore = ref<Record<string, boolean>>({})
+const logErrors = ref<Record<string, boolean>>({})
+const importKey = ref('')
+const pastedState = ref('')
+const importing = ref(false)
+const importError = ref('')
 const search = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -107,8 +136,36 @@ let poll: ReturnType<typeof setInterval> | undefined
 let clock: ReturnType<typeof setInterval> | undefined
 let disposed = false
 let configLoaded = false
-const modelOptions = computed(() => [...new Set(['gpt-6-astra', ...(pool.value?.models || [])])].sort())
-const visibleRows = computed(() => (pool.value?.items || []).filter(row => (!modelFilter.value || row.model === modelFilter.value) && `${row.account_id} ${row.account_name} ${row.plan}`.toLowerCase().includes(search.value.trim().toLowerCase())))
+const accountModels = (id: number) => (pool.value?.items || []).filter(row => row.account_id === id).map(row => row.model)
+const visibleRows = computed(() => {
+  const groups = new Map<number, StatePoolRow[]>()
+  for (const row of pool.value?.items || []) { const rows = groups.get(row.account_id) || []; rows.push(row); groups.set(row.account_id, rows) }
+  return [...groups.values()].map(rows => rows.find(row => row.model === selectedModels.value[row.account_id]) || rows.find(row => row.model === 'gpt-6-astra') || rows[0]!).filter(row => `${row.account_id} ${row.account_name} ${row.plan}`.toLowerCase().includes(search.value.trim().toLowerCase()))
+})
+function selectModel(id: number, model: string) { selectedModels.value[id] = model; closeImport(); const row = visibleRows.value.find(row => row.account_id === id); if (row && logsOpen.value.has(id)) void loadEvents(row) }
+function modeLabel(mode?: string) { return t(`admin.accounts.statePool.mode_${mode || 'idle'}`) }
+function eventLabel(kind: string) { return t(`admin.accounts.statePool.event_${kind}`) }
+async function loadEvents(row: StatePoolRow, more = false) {
+  const key = rowKey(row)
+  try {
+    const previous = events.value[key] || []
+    const result = await getStateEvents(row, more ? previous[previous.length - 1]?.id || 0 : 0)
+    if (disposed) return
+    const merged = new Map([...previous, ...result].map(event => [event.id, event]))
+    events.value[key] = [...merged.values()].filter(event => Date.parse(event.created_at) > now.value - 7 * 86400000).sort((a, b) => b.id - a.id)
+    if (more || !previous.length) hasMore.value[key] = result.length === 50
+    logErrors.value[key] = false
+  } catch { logErrors.value[key] = true }
+}
+function toggleLogs(row: StatePoolRow) { if (logsOpen.value.has(row.account_id)) logsOpen.value.delete(row.account_id); else { logsOpen.value.add(row.account_id); void loadEvents(row) } }
+function closeImport() { importKey.value = ''; pastedState.value = ''; importError.value = '' }
+function openImport(row: StatePoolRow) { closeImport(); importKey.value = rowKey(row) }
+async function submitImport(row: StatePoolRow) {
+  importing.value = true; importError.value = ''
+  try { await importState(row, pastedState.value.trim()); closeImport(); app.showSuccess(t('admin.accounts.statePool.imported')); await loadPool() }
+  catch (error: any) { const reason = error?.message || error?.detail || error?.response?.data?.message || error?.response?.data?.detail || t('admin.accounts.statePool.refreshFailed'); importError.value = reasonLabel(reason) }
+  finally { importing.value = false; if (logsOpen.value.has(row.account_id)) void loadEvents(row) }
+}
 const validCount = computed(() => visibleRows.value.filter(isValid).length)
 const rowKey = (row: StatePoolRow) => `${row.account_id}:${row.model}`
 const remaining = (row: StatePoolRow) => row.expires_at ? Math.max(0, Date.parse(row.expires_at) - now.value) : 0
@@ -144,7 +201,9 @@ function reasonLabel(reason: string) {
   if (reason === 'response_created_gpt_5_6_luna') return t('admin.accounts.statePool.downgraded')
   if (reason === 'server_is_overloaded') return t('admin.accounts.statePool.overloaded')
   if (reason.startsWith('state_length_') || reason === 'unexpected_state_length') return t('admin.accounts.statePool.abnormalLength')
-  return t('admin.accounts.statePool.probeFailed')
+  const known: Record<string, string> = { replaced: 'replaced', same_state: 'sameState', not_newer: 'notNewer', account_busy: 'accountBusy', state_not_accepted: 'stateRejected', validation_not_completed: 'validationIncomplete', invalid_state_format: 'invalidFormat', future_state_timestamp: 'futureTimestamp', expired_state: 'expired', account_changed: 'accountChanged', concurrent_update: 'concurrentUpdate', invalid_encrypted_content: 'encryptedError', candidate_already_changed: 'concurrentUpdate' }
+  if (known[reason]) return t(`admin.accounts.statePool.${known[reason]}`)
+  return reason || '—'
 }
 async function loadPool() {
   if (loading.value || disposed) return
@@ -158,6 +217,7 @@ async function loadPool() {
     now.value = Date.now() + serverOffset
     if (!configLoaded) { proxyId.value = result.config.proxy_id || null; configLoaded = true }
     error.value = ''
+    for (const row of visibleRows.value) { if (logsOpen.value.has(row.account_id)) void loadEvents(row) }
   } catch (err: any) {
     if (!disposed && err?.code !== 'ERR_CANCELED') error.value = t('admin.accounts.statePool.loadFailed')
   } finally { loading.value = false }
@@ -186,5 +246,5 @@ onMounted(() => {
   clock = setInterval(() => { now.value = Date.now() + serverOffset }, 1000)
   poll = setInterval(() => { if (!document.hidden) void loadPool() }, 5000)
 })
-onUnmounted(() => { disposed = true; controller?.abort(); clearInterval(poll); clearInterval(clock) })
+onUnmounted(() => { disposed = true; closeImport(); controller?.abort(); clearInterval(poll); clearInterval(clock) })
 </script>

@@ -292,7 +292,11 @@
         </template>
 
         <template #cell-turn_state="{ row }">
-          <div v-if="row.turn_state" class="flex max-w-[200px] items-center gap-1.5">
+          <div v-if="row.turn_state_sent_length != null || row.turn_state_returned_length != null" class="mb-1 font-mono text-xs">
+            {{ t('admin.accounts.statePool.sent') }} {{ row.turn_state_sent_length == null ? t('admin.accounts.statePool.notRecorded') : row.turn_state_sent_length === 0 ? t('admin.accounts.statePool.notSent') : row.turn_state_sent_length }}
+            → {{ t('admin.accounts.statePool.returned') }} {{ row.turn_state_returned_length == null ? t('admin.accounts.statePool.notRecorded') : row.turn_state_returned_length === 0 ? t('admin.accounts.statePool.notReturned') : row.turn_state_returned_length }}
+          </div>
+          <div v-if="row.turn_state && (row.turn_state_returned_length == null || row.turn_state.length === row.turn_state_returned_length)" class="flex max-w-[200px] items-center gap-1.5">
             <!-- 长度是这列的重点：292 = 不降智，醒目标出来 -->
             <span
               class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
@@ -322,7 +326,7 @@
               <Icon :name="copiedRequestId === row.turn_state ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
             </button>
           </div>
-          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+          <span v-else-if="row.turn_state_sent_length == null && row.turn_state_returned_length == null" class="text-sm text-gray-400 dark:text-gray-500">{{ t('admin.accounts.statePool.notRecorded') }}</span>
         </template>
 
         <template #cell-user_agent="{ row }">

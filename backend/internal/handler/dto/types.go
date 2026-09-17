@@ -696,7 +696,9 @@ type AdminUsageLog struct {
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
 	// TurnState 是上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文），仅管理端可见。
 	// 长度在前端直接由该字符串算，不单独存列。
-	TurnState *string `json:"turn_state,omitempty"`
+	TurnStateSentLength     *int    `json:"turn_state_sent_length"`
+	TurnStateReturnedLength *int    `json:"turn_state_returned_length"`
+	TurnState               *string `json:"turn_state,omitempty"`
 	// TurnStateOverridden 表示本次出站带的是账号级 turn-state 覆写值。
 	TurnStateOverridden *bool `json:"turn_state_overridden,omitempty"`
 	// TurnStateSource 是覆写来源：manual / auto / auto_stale。

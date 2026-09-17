@@ -101,10 +101,8 @@ func openAITurnStatePoolLock(accountID int64) *sync.Mutex {
 // IsOpenAITurnStateAutoEnabled 报告账号是否开启了自动接管。
 // 与手填覆写同一条适用范围：只有最终落到 ChatGPT Codex 后端的账号才认这个头。
 func (a *Account) IsOpenAITurnStateAutoEnabled() bool {
-	if a == nil || !a.TargetsChatGPTCodexUpstream() {
-		return false
-	}
-	return a.getExtraBool(openAITurnStateAutoExtraKey)
+	// Retired: only the account/model probe pool may inject a managed state.
+	return false
 }
 
 func (a *Account) openAITurnStatePoolSize() int {
