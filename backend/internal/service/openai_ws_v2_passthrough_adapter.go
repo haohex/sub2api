@@ -1166,7 +1166,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	firstClientMessage = s.guardOpenAICodexWSFrameTurnState(c, account, firstClientMessage)
 	firstClientMessage, firstStateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, firstClientMessage, turnState, token, headers)
 	stateObservation.Store(firstStateObservation)
-	firstStateObservation.observeHeader(handshakeHeaders.Get(openAICodexTurnStateHeader))
 	s.scheduleCodexWSSideCalls(c, account, headers, firstClientMessage)
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()

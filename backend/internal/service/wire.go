@@ -294,8 +294,10 @@ func ProvideCodexTurnStateProbeService(
 	tokenProvider *OpenAITokenProvider,
 	httpUpstream HTTPUpstream,
 	gateway *OpenAIGatewayService,
+	settings SettingRepository,
 ) *CodexTurnStateProbeService {
 	svc := NewCodexTurnStateProbeService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
+	svc.settingRepo = settings
 	if gateway != nil {
 		gateway.codexTurnStateProbe = svc
 	}

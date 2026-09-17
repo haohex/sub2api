@@ -20,6 +20,7 @@ func TestApplyConfiguredCodexTurnState_IsolatedByModelTokenAndTTL(t *testing.T) 
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
 			"access_token":  "token-a",
+			"plan_type":     "plus",
 			"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5"},
 		},
 		Extra: map[string]any{
@@ -84,7 +85,7 @@ func TestCodexTurnStateProbe_ClosesSSEAfterResponseHeaders(t *testing.T) {
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "token"},
+		Credentials: map[string]any{"access_token": "token", "plan_type": "plus"},
 	}
 	proxy := &Proxy{ID: 23, Protocol: "http", Host: "proxy.example", Port: 8080, Status: StatusActive}
 
@@ -99,6 +100,7 @@ func TestConfiguredCodexTurnStateOverridesDeviceWireFrame(t *testing.T) {
 	now := time.Now()
 	state := strings.Repeat("s", codexTurnStateLength)
 	account := wireProfileTestAccount(true)
+	account.Credentials["plan_type"] = "plus"
 	account.Credentials["model_mapping"] = map[string]any{"gpt-5.5": "gpt-5.5"}
 	account.Extra[CodexTurnStateProbeEnabledExtraKey] = true
 	account.Extra[CodexTurnStateProbeProxyIDExtraKey] = int64(23)

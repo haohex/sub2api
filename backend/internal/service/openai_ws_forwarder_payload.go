@@ -202,12 +202,10 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	account.ApplyHeaderOverrides(headers)
 	setOpenAICodexRoutingHint(headers, account, routingModel, routingServiceTier)
 	applyCodexDeviceWireProfile(c, account, headers, true)
-	// Device-wire accounts deliberately keep turn-state in frame metadata and
-	// must not receive it on the handshake. Other WS modes use the same final
-	// account/model override as HTTP requests.
-	if !codexDeviceWireProfileEnabled(c, account) {
-		ApplyConfiguredCodexTurnState(account, headers, routingModel, token)
+	if account.TargetsChatGPTCodexUpstream() {
+		headers.Del(openAICodexTurnStateHeader)
 	}
+
 	logOpenAIRoutingDiagnostics(
 		ctx,
 		account,
@@ -281,14 +279,14 @@ func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []by
 			turnState = configuredState
 		}
 	}
-	if !deviceProfile && configuredState == "" {
-		return payload
-	}
 	// 覆写是管理员的显式动作，要盖过真客户端自带的 blob。判据必须是「本次真的覆写了」
 	// 而不是「extra 里有手填值」：开了自动接管时手填值刻意保留在 extra 里但不生效
 	//（applyOpenAICodexTurnStateOverrideWSManualOnly），按配置判会把握手时那一个陈旧
 	// blob 强按进整条连接的每一帧。上游解析覆写时会把实际注入值写进上下文。
 	forcedTurnStateOverride := turnState != "" && turnState == openAITurnStateInjectedFromContext(c)
+	if !deviceProfile && configuredState == "" && !forcedTurnStateOverride && (turnState == "" || !account.TargetsChatGPTCodexUpstream()) {
+		return payload
+	}
 	if meta := gjson.GetBytes(payload, "client_metadata"); !meta.Exists() || meta.IsObject() {
 		if turnState = strings.TrimSpace(turnState); turnState != "" {
 			existing := gjson.GetBytes(payload, "client_metadata."+openAICodexTurnStateHeader)

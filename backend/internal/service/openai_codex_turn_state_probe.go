@@ -16,7 +16,8 @@ import (
 	"time"
 )
 
-// Codex turn-state probe settings are account-scoped. The raw state is kept in
+// Account settings enable probing; the acquisition proxy is a global setting.
+// The raw state is kept in
 // a separate managed cache key so the admin DTO can expose the configuration
 // without ever returning the opaque upstream value.
 const (
@@ -41,12 +42,13 @@ const (
 // set is derived from the account's model restriction mapping.
 type CodexTurnStateProbeConfig struct {
 	Enabled bool
-	ProxyID int64
+	ProxyID int64 // Filled from global settings when a scan starts, never from account extra.
 }
 
 type codexTurnStateProbeFailure struct {
 	Attempts int
 	FailedAt time.Time
+	Reason   string
 }
 
 type codexTurnStateCacheEntry struct {
@@ -87,11 +89,6 @@ func CodexTurnStateProbeConfigFromExtra(extra map[string]any) (CodexTurnStatePro
 		return config, nil
 	}
 
-	proxyID, ok := positiveInt64Extra(extra[CodexTurnStateProbeProxyIDExtraKey])
-	if !ok {
-		return config, errors.New(CodexTurnStateProbeProxyIDExtraKey + " must be a positive integer")
-	}
-	config.ProxyID = proxyID
 	return config, nil
 }
 
@@ -122,7 +119,7 @@ func NormalizeCodexTurnStateProbeExtra(platform, accountType string, extra map[s
 		delete(extra, CodexTurnStateProbeRetryExtraKey)
 		return extra, nil
 	}
-	extra[CodexTurnStateProbeProxyIDExtraKey] = config.ProxyID
+	delete(extra, CodexTurnStateProbeProxyIDExtraKey)
 	delete(extra, CodexTurnStateProbeModelsExtraKey)
 	delete(extra, CodexTurnStateProbeRetryExtraKey)
 	return extra, nil
@@ -254,21 +251,21 @@ func configuredCodexTurnState(account *Account, model, token string, now time.Ti
 		return ""
 	}
 	entry, ok := codexTurnStateCacheFromExtra(account.Extra)[modelKey]
-	if !ok || !validCodexTurnStateCacheEntry(entry, config.ProxyID, token, now) {
+	if !ok || !validCodexTurnStateCacheEntry(entry, CodexTurnStateHealthyLength(account), token, now) {
 		return ""
 	}
 	return entry.State
 }
 
-func validCodexTurnStateCacheEntry(entry codexTurnStateCacheEntry, proxyID int64, token string, now time.Time) bool {
-	if !validCodexTurnStateCacheMetadata(entry, proxyID, now) || entry.CredentialHash == "" {
+func validCodexTurnStateCacheEntry(entry codexTurnStateCacheEntry, expectedLength int, token string, now time.Time) bool {
+	if !validCodexTurnStateCacheMetadata(entry, expectedLength, now) || entry.CredentialHash == "" {
 		return false
 	}
 	return entry.CredentialHash == codexTurnStateCredentialHash(token)
 }
 
-func validCodexTurnStateCacheMetadata(entry codexTurnStateCacheEntry, proxyID int64, now time.Time) bool {
-	if len(entry.State) != codexTurnStateLength || entry.ProxyID != proxyID {
+func validCodexTurnStateCacheMetadata(entry codexTurnStateCacheEntry, expectedLength int, now time.Time) bool {
+	if expectedLength == 0 || len(entry.State) != expectedLength {
 		return false
 	}
 	if entry.ObtainedAt.IsZero() || entry.ExpiresAt.IsZero() || !now.Before(entry.ExpiresAt) {
@@ -409,15 +406,16 @@ func codexTurnStateProbeFailuresFromExtra(extra map[string]any) map[string]codex
 		if !ok {
 			continue
 		}
-		attempts, ok := positiveInt64Extra(values["attempts"])
-		if !ok {
+		attempts, err := strconv.ParseInt(fmt.Sprint(values["attempts"]), 10, 64)
+		if err != nil || attempts < 0 {
 			continue
 		}
 		failedAt, ok := parseCodexTurnStateTime(values["failed_at"])
 		if !ok {
 			continue
 		}
-		result[model] = codexTurnStateProbeFailure{Attempts: int(min(attempts, int64(codexTurnStateProbeMaxAttempts))), FailedAt: failedAt}
+		reason, _ := values["reason"].(string)
+		result[model] = codexTurnStateProbeFailure{Attempts: int(min(attempts, int64(codexTurnStateProbeMaxAttempts))), FailedAt: failedAt, Reason: reason}
 	}
 	return result
 }
@@ -431,6 +429,7 @@ func codexTurnStateProbeFailuresToExtra(failures map[string]codexTurnStateProbeF
 		result[model] = map[string]any{
 			"attempts":  failure.Attempts,
 			"failed_at": failure.FailedAt.UTC().Format(time.RFC3339Nano),
+			"reason":    failure.Reason,
 		}
 	}
 	return result
@@ -452,6 +451,10 @@ type CodexTurnStateProbeService struct {
 	proxyRepo     ProxyRepository
 	tokenProvider *OpenAITokenProvider
 	httpUpstream  HTTPUpstream
+	settingRepo   SettingRepository
+	wsDialer      openAIWSClientDialer
+	runtimeMu     sync.Mutex
+	runtime       map[codexTurnStatePoolKey]codexTurnStateProbeRuntime
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -475,6 +478,8 @@ func NewCodexTurnStateProbeService(
 		proxyRepo:     proxyRepo,
 		tokenProvider: tokenProvider,
 		httpUpstream:  httpUpstream,
+		wsDialer:      newDefaultOpenAIWSClientDialer(),
+		runtime:       make(map[codexTurnStatePoolKey]codexTurnStateProbeRuntime),
 		stopCh:        make(chan struct{}),
 		wakeCh:        make(chan struct{}, 1),
 		ctx:           ctx,
@@ -548,6 +553,15 @@ func (s *CodexTurnStateProbeService) refreshOnce(ctx context.Context) {
 		if configErr != nil || !config.Enabled {
 			continue
 		}
+		if CodexTurnStateHealthyLength(account) == 0 {
+			continue
+		}
+		globalConfig, err := s.GetGlobalConfig(ctx)
+		if err != nil {
+			slog.Warn("codex_turn_state_probe_global_config_failed", "error", err)
+			return
+		}
+		config.ProxyID = globalConfig.ProxyID
 		if err := s.refreshAccount(ctx, account, config); err != nil {
 			slog.Warn("codex_turn_state_probe_refresh_failed", "account_id", account.ID, "error", err)
 		}
@@ -562,6 +576,9 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 	lock.Lock()
 	defer lock.Unlock()
 
+	if CodexTurnStateHealthyLength(account) == 0 {
+		return nil
+	}
 	now := time.Now()
 	models := CodexTurnStateProbeModels(account)
 	oldCache := codexTurnStateCacheFromExtra(account.Extra)
@@ -582,7 +599,7 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 	}
 	for model, entry := range oldCache {
 		modelKey := codexTurnStateModelKey(account, model)
-		if modelKey == "" || !containsString(models, modelKey) || !validCodexTurnStateCacheMetadata(entry, config.ProxyID, now) {
+		if modelKey == "" || !containsString(models, modelKey) || !validCodexTurnStateCacheMetadata(entry, CodexTurnStateHealthyLength(account), now) {
 			continue
 		}
 		cache[modelKey] = entry
@@ -599,6 +616,9 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 		return persistResults()
 	}
 
+	if config.ProxyID <= 0 {
+		return errors.New("global probe proxy is not configured")
+	}
 	proxy, err := s.proxyRepo.GetByID(ctx, config.ProxyID)
 	if err != nil {
 		if persistErr := persistResults(); persistErr != nil {
@@ -623,7 +643,7 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 		return err
 	}
 	for modelKey, entry := range cache {
-		if !validCodexTurnStateCacheEntry(entry, config.ProxyID, token, now) {
+		if !validCodexTurnStateCacheEntry(entry, CodexTurnStateHealthyLength(account), token, now) {
 			delete(cache, modelKey)
 		}
 	}
@@ -632,27 +652,35 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 		if modelKey == "" {
 			continue
 		}
+		forced := s.takeManualRefresh(account.ID, modelKey)
 		failure := failures[modelKey]
+		if forced {
+			failure.Attempts = 0
+		}
 		remainingAttempts := codexTurnStateProbeMaxAttempts - failure.Attempts
 		if remainingAttempts <= 0 {
 			continue
 		}
-		if entry, ok := cache[modelKey]; ok && validCodexTurnStateCacheEntry(entry, config.ProxyID, token, now) &&
-			!codexTurnStateCacheNeedsRefresh(entry, now) {
+		if entry, ok := cache[modelKey]; ok && validCodexTurnStateCacheEntry(entry, CodexTurnStateHealthyLength(account), token, now) &&
+			!codexTurnStateCacheNeedsRefresh(entry, now) && !forced {
 			continue
 		}
+		s.setProbeRuntime(account.ID, modelKey, "running", 0, "")
 		state, obtainedAt, probeErr := s.probeModel(ctx, account, proxy, token, modelKey, remainingAttempts)
 		if probeErr != nil {
+			s.setProbeRuntime(account.ID, modelKey, "idle", remainingAttempts, "probe_failed")
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			failures[modelKey] = codexTurnStateProbeFailure{
 				Attempts: failure.Attempts + remainingAttempts,
 				FailedAt: time.Now().UTC(),
+				Reason:   "probe_failed",
 			}
 			slog.Warn("codex_turn_state_probe_model_failed", "account_id", account.ID, "model", modelKey, "error", probeErr)
 			continue
 		}
+		s.setProbeRuntime(account.ID, modelKey, "idle", 0, "")
 		delete(failures, modelKey)
 		cache[modelKey] = codexTurnStateCacheEntry{
 			State:          state,
@@ -701,11 +729,23 @@ func (s *CodexTurnStateProbeService) probeModel(
 		return "", time.Time{}, errors.New("probe attempt budget is exhausted")
 	}
 	var lastErr error
+	useWS := false
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return "", time.Time{}, err
 		}
-		state, obtainedAt, err := s.probeOnce(ctx, account, proxy, token, model)
+		s.setProbeRuntime(account.ID, model, "running", attempt, "")
+		var state string
+		var obtainedAt time.Time
+		var err error
+		if useWS {
+			state, obtainedAt, err = s.probeWSOnce(ctx, account, proxy, token, model)
+		} else {
+			state, obtainedAt, err = s.probeOnce(ctx, account, proxy, token, model)
+		}
+		if errors.Is(err, errCodexTurnStateMissing) {
+			useWS = true
+		}
 		if err == nil {
 			slog.Info("codex_turn_state_probe_succeeded", "account_id", account.ID, "model", model, "attempt", attempt, "state_length", len(state), "expires_at", obtainedAt.Add(codexTurnStateTTL).UTC().Format(time.RFC3339))
 			return state, obtainedAt, nil
@@ -768,9 +808,8 @@ func (s *CodexTurnStateProbeService) probeOnce(
 	if resp == nil {
 		return "", time.Time{}, errors.New("probe returned a nil response")
 	}
-	// The probe deliberately never reads the SSE body. Closing it immediately
-	// after headers arrive cancels the upstream stream and prevents completion
-	// tokens from being consumed.
+	// HTTP acquisition stops after response headers; missing state switches
+	// the shared attempt loop to fresh WS connections.
 	if resp.Body != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}
@@ -778,8 +817,12 @@ func (s *CodexTurnStateProbeService) probeOnce(
 		return "", time.Time{}, fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 	}
 	state := resp.Header.Get(openAICodexTurnStateHeader)
-	if len(state) != codexTurnStateLength {
-		return "", time.Time{}, fmt.Errorf("upstream state length %d, want %d", len(state), codexTurnStateLength)
+	if strings.TrimSpace(state) == "" {
+		return "", time.Time{}, errCodexTurnStateMissing
+	}
+	expected := CodexTurnStateHealthyLength(account)
+	if expected == 0 || len(state) != expected {
+		return "", time.Time{}, fmt.Errorf("upstream state length %d, want %d", len(state), expected)
 	}
 	return state, time.Now().UTC(), nil
 }

@@ -502,15 +502,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if _, err := NormalizeCodexTurnStateProbeExtra(input.Platform, input.Type, accountExtra); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE", err.Error())
 	}
-	if probeConfig, configErr := CodexTurnStateProbeConfigFromExtra(accountExtra); configErr == nil && probeConfig.Enabled {
-		if s.proxyRepo == nil {
-			return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_PROXY_UNAVAILABLE", "probe proxy repository is unavailable")
-		}
-		probeProxy, proxyErr := s.proxyRepo.GetByID(ctx, probeConfig.ProxyID)
-		if proxyErr != nil || probeProxy == nil || !probeProxy.IsActive() || probeProxy.IsExpired(time.Now()) {
-			return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_PROXY_INVALID", "probe proxy must exist, be active, and not be expired")
-		}
-	}
+
 	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
 		return nil, err
 	}
@@ -790,15 +782,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if _, err := NormalizeCodexTurnStateProbeExtra(account.Platform, account.Type, account.Extra); err != nil {
 			return nil, infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE", err.Error())
 		}
-		if probeConfig, configErr := CodexTurnStateProbeConfigFromExtra(account.Extra); configErr == nil && probeConfig.Enabled {
-			if s.proxyRepo == nil {
-				return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_PROXY_UNAVAILABLE", "probe proxy repository is unavailable")
-			}
-			probeProxy, proxyErr := s.proxyRepo.GetByID(ctx, probeConfig.ProxyID)
-			if proxyErr != nil || probeProxy == nil || !probeProxy.IsActive() || probeProxy.IsExpired(time.Now()) {
-				return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_PROXY_INVALID", "probe proxy must exist, be active, and not be expired")
-			}
-		}
+
 	}
 	if requestedCodexTurnStateProbeRetry {
 		if !IsCodexTurnStateProbeAccount(account) {

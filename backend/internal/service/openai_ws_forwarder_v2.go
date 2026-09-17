@@ -359,9 +359,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, wrapOpenAIWSFallback("write_request", marshalErr)
 	}
 	raw, stateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, raw, clientTurnState, token, wsHeaders)
-	if !lease.Reused() {
-		stateObservation.observeHeader(lease.HandshakeHeader(openAIWSTurnStateHeader))
-	}
 	writeErr := writeCodexWSFrame(ctx, c, account, lease, raw, s.openAIWSWriteTimeout())
 	if err := writeErr; err != nil {
 		lease.MarkBroken()

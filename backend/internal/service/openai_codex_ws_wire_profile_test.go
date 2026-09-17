@@ -184,7 +184,7 @@ func requireCodexWSStreamRequestStart(t *testing.T, frame []byte, want string) {
 	require.True(t, ms > now-60_000 && ms <= now+1_000, "时间戳不在当前时间窗内：%d vs %d", ms, now)
 }
 
-// 入站握手带 turn-state：双开握手不带、帧内承载（帧自带的不覆盖）；未开投影维持握手承载。
+// 入站握手带 turn-state：双开握手不带、帧内承载（帧自带的不覆盖）；非双开同样移入帧内。
 func TestCodexDeviceWireProfileWSIngressTurnState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, mode := range []string{OpenAIWSIngressModePassthrough, OpenAIWSIngressModeCtxPool} {
@@ -242,8 +242,12 @@ func TestCodexDeviceWireProfileWSIngressTurnState(t *testing.T) {
 						require.NotEqual(t, "123456", gjson.GetBytes(second, "client_metadata."+codexWSStreamRequestStartKey).String(),
 							"发送边界无条件重盖（client.rs:2105-2111 insert）：%s", second)
 					} else {
-						require.Equal(t, "turn-state-1", headers[0].Get(openAICodexTurnStateHeader), "未开投影维持握手承载")
-						require.Equal(t, own, got, "未开投影不往帧里补")
+						require.Empty(t, headers[0].Get(openAICodexTurnStateHeader), "所有 Codex 握手都不携带 state")
+						want := own
+						if want == "" {
+							want = "turn-state-1"
+						}
+						require.Equal(t, want, got, "非双开仅在帧缺值时迁移客户端回带值")
 						require.Equal(t, "client_metadata", topLevelKeys(t, sent)[0], "未开投影不重排帧：%s", sent)
 						require.Equal(t, "input", topLevelKeys(t, second)[0], "未开投影不重排第二帧：%s", second)
 						require.False(t, gjson.GetBytes(sent, "client_metadata."+codexWSStreamRequestStartKey).Exists(), "未开投影不盖时间戳")
@@ -257,7 +261,7 @@ func TestCodexDeviceWireProfileWSIngressTurnState(t *testing.T) {
 // 上游握手铸造 turn-state 后：真客户端在 connect 之前构造帧（client.rs:1789-1796），
 // 而且网关握手铸出的 turn-state 客户端根本收不到（core/src/client.rs:1174 connect 传 None、
 // :1239-1242 握手不发），所以双开的帧里既不带它、重新拨号的握手也不把它带回去（写回门控）；
-// 未开投影的账号维持既有的握手回填。
+// 非双开账号同样不回填握手。
 func TestCodexDeviceWireProfileWSIngressUpstreamMintedTurnState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, enabled := range []bool{false, true} {
@@ -294,7 +298,7 @@ func TestCodexDeviceWireProfileWSIngressUpstreamMintedTurnState(t *testing.T) {
 				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "双开重新拨号的握手不带（写回门控）")
 				require.Empty(t, secondFrame, "网关铸出的 turn-state 客户端拿不到，不得进帧：%s", secondCapture.frames[0])
 			} else {
-				require.Equal(t, "minted-1", headers[1].Get(openAICodexTurnStateHeader), "未开投影维持握手回填")
+				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "重连也不回填握手 state")
 				require.Empty(t, secondFrame)
 			}
 		})
@@ -422,7 +426,7 @@ func TestCodexDeviceWireProfileWSV2TurnState(t *testing.T) {
 					requireCodexWSStreamRequestStart(t, raw, "")
 				}
 			} else {
-				require.Equal(t, "minted-1", headers[1].Get(openAICodexTurnStateHeader), "未开投影维持握手回填")
+				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "重连也不回填握手 state")
 				require.Empty(t, secondFrame)
 			}
 		})
@@ -441,7 +445,7 @@ func TestCodexDeviceWireProfileWSHandshakeBuilder(t *testing.T) {
 			true, "turn-state-1", convTestTurnMetadata(), convTestSession, "", "")
 		require.NoError(t, err)
 		require.Equal(t, resolveCodexOutboundIdentity("").version, headers.Get("version"), "enabled=%v", enabled)
-		require.Equal(t, !enabled, headers.Get(openAICodexTurnStateHeader) != "", "enabled=%v", enabled)
+		require.Empty(t, headers.Get(openAICodexTurnStateHeader), "enabled=%v", enabled)
 	}
 }
 
@@ -460,7 +464,7 @@ func codexWSRecordTurnStateOrigin(t *testing.T, svc *OpenAIGatewayService, minte
 
 // 跨账号回声守卫（WS 入站，passthrough / ctx_pool）：客户端把 A 账号铸造的 turn-state
 // 回带给 failover 后的 B 账号，握手头与帧内 client_metadata 都必须剥离；回带给 A 本人
-// 则保持原样（双开：握手不带、帧内承载；未开投影：握手承载、帧原样）。
+// 则保持原样（双开：握手不带、帧内承载；非双开：握手不带、帧内承载）。
 func TestCodexWSTurnStateEchoGuardIngress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, mode := range []string{OpenAIWSIngressModePassthrough, OpenAIWSIngressModeCtxPool} {
@@ -501,8 +505,7 @@ func TestCodexWSTurnStateEchoGuardIngress(t *testing.T) {
 					sent := upstream.rawWrites[0]
 					frameState := gjson.GetBytes(sent, "client_metadata."+openAICodexTurnStateHeader)
 					if sameAccount {
-						require.Equal(t, !enabled, headers[0].Get(openAICodexTurnStateHeader) == "blob-A",
-							"同账号：未开投影握手承载，双开握手不带")
+						require.Empty(t, headers[0].Get(openAICodexTurnStateHeader), "同账号也只允许帧内携带 state")
 						require.Equal(t, "blob-A", frameState.String(), "同账号回带原样：%s", sent)
 						return
 					}
@@ -572,8 +575,8 @@ func TestCodexWSTurnStateEchoGuardV2(t *testing.T) {
 						require.Empty(t, headers[1].Get(openAICodexTurnStateHeader))
 						require.Equal(t, "minted-1", frameState.String(), "同账号回带：双开帧内承载")
 					} else {
-						require.Equal(t, "minted-1", headers[1].Get(openAICodexTurnStateHeader), "同账号回带：握手承载")
-						require.False(t, frameState.Exists())
+						require.Empty(t, headers[1].Get(openAICodexTurnStateHeader))
+						require.Equal(t, "minted-1", frameState.String(), "同账号回带移入帧内")
 					}
 					return
 				}
@@ -813,7 +816,7 @@ func TestCodexWSTurnStateEchoGuardIngressStateStoreFallback(t *testing.T) {
 	pool.setClientDialerForTest(dialer)
 	svc.openaiWSPool = pool
 
-	// 未开投影的账号：turn-state 走握手头，跨账号泄漏在握手上直接可见。
+	// 非双开账号同样检查握手禁区与帧内跨账号隔离。
 	accountA := wireProfileTestAccount(false)
 	accountA.Extra["openai_oauth_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
 	runCodexWSIngress(t, svc, accountA, codexWSIngressInbound(), []string{codexWSTestFrame})

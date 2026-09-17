@@ -13,7 +13,7 @@ import (
 func codexTurnStateTestAccount() *Account {
 	now := time.Now()
 	return &Account{ID: 4242, Platform: PlatformOpenAI, Type: AccountTypeSetupToken,
-		Credentials: map[string]any{"access_token": "review-token", "model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}},
+		Credentials: map[string]any{"access_token": "review-token", "plan_type": "plus", "model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}},
 		Extra: map[string]any{CodexTurnStateProbeEnabledExtraKey: true, CodexTurnStateProbeProxyIDExtraKey: int64(23),
 			CodexTurnStateProbeCacheExtraKey: codexTurnStateCacheToExtra(map[string]codexTurnStateCacheEntry{
 				"gpt-5.4": {State: strings.Repeat("a", 292), ObtainedAt: now, ExpiresAt: now.Add(time.Hour), ProxyID: 23, CredentialHash: codexTurnStateCredentialHash("review-token")},
@@ -32,6 +32,7 @@ func TestCodexTurnStateUnchangedCredentialsPreserveCandidate(t *testing.T) {
 
 func TestCodexTurnStateOutboundModelMustNotBeMappedTwice(t *testing.T) {
 	account := codexTurnStateTestAccount()
+	account.Credentials["plan_type"] = "plus"
 	account.Credentials["model_mapping"] = map[string]any{"alias": "gpt-5.4", "gpt-5.4": "gpt-5.5"}
 	cache := codexTurnStateCacheFromExtra(account.Extra)
 	entry := cache["gpt-5.4"]
@@ -53,6 +54,7 @@ func (*codexTurnStateTestProxyRepo) GetByID(context.Context, int64) (*Proxy, err
 
 func TestCodexTurnStateProbeUsesEachMappedTarget(t *testing.T) {
 	account := codexTurnStateTestAccount()
+	account.Credentials["plan_type"] = "plus"
 	account.Credentials["model_mapping"] = map[string]any{"alias": "gpt-5.4", "gpt-5.4": "gpt-5.5"}
 	delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}

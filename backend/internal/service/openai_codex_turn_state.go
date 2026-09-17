@@ -155,7 +155,7 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateFromWSEvent(c *gin.Contex
 	if !containsASCIIFold(frame, []byte(openAICodexTurnStateHeader)) {
 		return
 	}
-	if gjson.GetBytes(frame, "type").String() != "response.metadata" {
+	if !codexTurnStateMetadataEvent(gjson.GetBytes(frame, "type").String()) {
 		return
 	}
 	headers := gjson.GetBytes(frame, "headers")

@@ -55,15 +55,17 @@ func codexTurnStateCandidateSent(account *Account, model, state string) *codexTu
 		return nil
 	}
 	entry, ok := codexTurnStateCacheFromExtra(account.Extra)[model]
-	if !ok || entry.State != state || !validCodexTurnStateCacheMetadata(entry, config.ProxyID, time.Now()) {
+	if !ok || entry.State != state || !validCodexTurnStateCacheMetadata(entry, CodexTurnStateHealthyLength(account), time.Now()) {
 		return nil
 	}
 	return &codexTurnStateRequest{accountID: account.ID, model: model, entry: entry}
 }
 
 type codexTurnStateObservation struct {
-	once       sync.Once
-	invalidate func(string)
+	once           sync.Once
+	expectedLength int
+	model          string
+	invalidate     func(string)
 }
 
 func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, candidate *codexTurnStateRequest, wake func()) *codexTurnStateObservation {
@@ -71,7 +73,7 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 		return nil
 	}
 	accountID := candidate.accountID
-	return &codexTurnStateObservation{invalidate: func(reason string) {
+	return &codexTurnStateObservation{expectedLength: len(candidate.entry.State), model: candidate.model, invalidate: func(reason string) {
 		// The client may disconnect on a failure frame. Persist the observation with
 		// a bounded, detached context so that cancellation cannot revive bad state.
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
@@ -88,12 +90,12 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 			}
 			cache := codexTurnStateCacheFromExtra(current.Extra)
 			entry, ok := cache[candidate.model]
-			if !ok || entry != candidate.entry || entry.ProxyID != config.ProxyID {
+			if !ok || entry != candidate.entry {
 				return
 			}
 			delete(cache, candidate.model)
 			failures := codexTurnStateProbeFailuresFromExtra(current.Extra)
-			delete(failures, candidate.model)
+			failures[candidate.model] = codexTurnStateProbeFailure{Attempts: 0, FailedAt: time.Now().UTC(), Reason: reason}
 			saved, err := saveCodexTurnStateProbeRuntime(saveCtx, repo, current, codexTurnStateProbeRuntimeUpdates(cache, failures))
 			if err != nil {
 				slog.Warn("codex_turn_state_observation_save_failed", "account_id", accountID, "error", err)
@@ -118,8 +120,8 @@ func (o *codexTurnStateObservation) observeReason(reason string) {
 }
 
 func (o *codexTurnStateObservation) observeHeader(state string) {
-	if len(state) == 312 {
-		o.observeReason("turn_state_length_312")
+	if o != nil && state != "" && o.expectedLength > 0 && len(state) != o.expectedLength {
+		o.observeReason("unexpected_state_length")
 	}
 }
 
@@ -130,7 +132,7 @@ func (o *codexTurnStateObservation) observeEvent(payload []byte, eventType strin
 	if eventType == "" {
 		eventType = gjson.GetBytes(payload, "type").String()
 	}
-	if eventType == "response.created" && gjson.GetBytes(payload, "response.model").String() == "gpt-5.6-luna" {
+	if eventType == "response.created" && o.model != "gpt-5.6-luna" && gjson.GetBytes(payload, "response.model").String() == "gpt-5.6-luna" {
 		o.observeReason("response_created_gpt_5_6_luna")
 		return
 	}
@@ -146,7 +148,7 @@ func (o *codexTurnStateObservation) observeEvent(payload []byte, eventType strin
 		o.observeReason("server_is_overloaded")
 		return
 	}
-	if eventType == "response.metadata" {
+	if codexTurnStateMetadataEvent(eventType) {
 		headers := gjson.GetBytes(payload, "headers")
 		headers.ForEach(func(key, value gjson.Result) bool {
 			if strings.EqualFold(key.String(), openAICodexTurnStateHeader) && value.Type == gjson.String {

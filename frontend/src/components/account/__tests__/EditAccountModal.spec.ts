@@ -312,6 +312,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
     },
     global: {
       stubs: {
+        RouterLink: { template: '<a><slot /></a>' },
         BaseDialog: BaseDialogStub,
         Select: SelectStub,
         Icon: true,

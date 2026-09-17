@@ -80,7 +80,7 @@ func TestCodexTurnStateEarlyInvalidationSignals(t *testing.T) {
 			require.Contains(t, codexTurnStateProbeFailuresFromExtra(account.Extra), "gpt-5.5")
 			if tc.invalid {
 				require.Equal(t, 1, wakes)
-				require.NotContains(t, codexTurnStateProbeFailuresFromExtra(account.Extra), "gpt-5.4")
+				require.Zero(t, codexTurnStateProbeFailuresFromExtra(account.Extra)["gpt-5.4"].Attempts)
 			} else {
 				require.Zero(t, wakes)
 			}

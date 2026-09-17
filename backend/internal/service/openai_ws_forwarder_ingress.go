@@ -958,7 +958,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			// 双开：握手不带 turn-state（client.rs:1241 传 None），后续拨号同样不能带；
 			// 帧内默认承载客户端自己的值，命中账号级候选时由帧收口覆盖。
-			if !codexDeviceWireProfileEnabled(c, account) {
+			if !account.TargetsChatGPTCodexUpstream() && !codexDeviceWireProfileEnabled(c, account) {
 				updatedHeaders := cloneHeader(baseAcquireReq.Headers)
 				if updatedHeaders == nil {
 					updatedHeaders = make(http.Header)
@@ -996,9 +996,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// turn-state 头仍是网关持有的值，不套帧内规则。
 		payload = s.guardOpenAICodexWSFrameTurnState(c, account, payload)
 		payload, stateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, payload, clientTurnState, token, baseAcquireReq.Headers)
-		if !lease.Reused() {
-			stateObservation.observeHeader(lease.HandshakeHeader(openAIWSTurnStateHeader))
-		}
 		s.scheduleCodexWSSideCalls(c, account, baseAcquireReq.Headers, payload)
 		if err := writeCodexWSFrame(ctx, c, account, lease, payload, s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
