@@ -115,7 +115,9 @@ func TestAccountFromServiceShallow_RedactsCodexTurnStateCache(t *testing.T) {
 	raw, err := json.Marshal(got)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), state)
-	require.True(t, got.Extra[service.CodexTurnStateProbeEnabledExtraKey].(bool))
+	enabled, ok := got.Extra[service.CodexTurnStateProbeEnabledExtraKey].(bool)
+	require.True(t, ok)
+	require.True(t, enabled)
 	require.Contains(t, got.Extra, service.CodexTurnStateProbeFailureExtraKey)
 }
 

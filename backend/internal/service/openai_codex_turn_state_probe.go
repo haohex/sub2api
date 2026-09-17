@@ -180,9 +180,7 @@ func normalizeCodexTurnStateModels(value any) []string {
 			}
 		}
 	case string:
-		for _, model := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' }) {
-			raw = append(raw, model)
-		}
+		raw = append(raw, strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' })...)
 	}
 
 	seen := make(map[string]struct{}, len(raw))
@@ -741,7 +739,11 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 
 func (s *CodexTurnStateProbeService) accountLock(accountID int64) *sync.Mutex {
 	value, _ := s.accountMu.LoadOrStore(accountID, &sync.Mutex{})
-	return value.(*sync.Mutex)
+	mutex, ok := value.(*sync.Mutex)
+	if !ok {
+		panic("codex turn-state account lock has an unexpected type")
+	}
+	return mutex
 }
 
 func (s *CodexTurnStateProbeService) probeToken(ctx context.Context, account *Account) (string, error) {
