@@ -2362,6 +2362,48 @@
         v-if="accountHasOpenAIExtraSettings"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
+        <div v-if="accountSupportsTurnStateOverride" class="space-y-3">
+          <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0">
+              <label class="input-label mb-0">{{ t('admin.accounts.openai.turnStateAuto') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.openai.turnStateAutoDesc') }}
+              </p>
+            </div>
+            <input
+              v-model="openAITurnStateAuto"
+              data-testid="edit-openai-turn-state-auto"
+              type="checkbox"
+              class="h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.openai.turnStateOverride') }}</label>
+            <p class="input-hint">{{ t('admin.accounts.openai.turnStateOverrideDesc') }}</p>
+            <p
+              v-if="openAITurnStateAuto"
+              data-testid="edit-openai-turn-state-auto-banner"
+              class="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+            >
+              {{ t('admin.accounts.openai.turnStateAutoTakeover') }}
+            </p>
+            <textarea
+              v-model="openAITurnStateOverride"
+              rows="3"
+              spellcheck="false"
+              :disabled="openAITurnStateAuto"
+              class="input font-mono text-xs disabled:cursor-not-allowed disabled:opacity-60"
+              :placeholder="t('admin.accounts.openai.turnStateOverridePlaceholder')"
+            ></textarea>
+            <p
+              v-if="openAITurnStateOverride.trim()"
+              class="mt-1 text-xs"
+              :class="openAITurnStateOverrideLength === 292 ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'"
+            >
+              {{ t('admin.accounts.openai.turnStateOverrideLength', { n: openAITurnStateOverrideLength }) }}
+            </p>
+          </div>
+        </div>
         <div class="flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.openai.compactMode') }}</label>
@@ -3227,6 +3269,13 @@ const hasOpenAIExtraSettings = (account?: { platform?: string; type?: string } |
   (account.type === 'oauth' || account.type === 'setup-token' || account.type === 'apikey' || account.type === 'cpr')
 
 const accountHasOpenAIExtraSettings = computed(() => hasOpenAIExtraSettings(props.account))
+// 与后端 Account.TargetsChatGPTCodexUpstream() 严格对齐：只有最终落到 ChatGPT Codex
+// 后端的账号才认 turn-state 覆写。apikey 走的是别的上游，后端会忽略，露出输入框
+// 等于让管理员配一个静默失效的值。
+const accountSupportsTurnStateOverride = computed(() =>
+  props.account?.platform === 'openai' &&
+  ['oauth', 'setup-token', 'cpr'].includes(props.account?.type || '')
+)
 
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
@@ -3544,6 +3593,17 @@ const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
 const upstreamRequestIdHeader = ref('')
+// Codex 回合状态覆写：非空时该账号所有出站请求强制带这条 x-codex-turn-state。
+const openAITurnStateOverride = ref('')
+const readOpenAITurnStateOverride = (extra: unknown): string => {
+  const value = (extra as Record<string, unknown> | undefined)?.openai_turn_state_override
+  return typeof value === 'string' ? value : ''
+}
+const openAITurnStateOverrideLength = computed(() => openAITurnStateOverride.value.trim().length)
+// 自动接管：开了之后手填值不再生效，由系统用候选池里最近一条 292 顶替 312。
+const openAITurnStateAuto = ref(false)
+const readOpenAITurnStateAuto = (extra: unknown): boolean =>
+  (extra as Record<string, unknown> | undefined)?.openai_turn_state_auto === true
 const readUpstreamRequestIdHeader = (extra: unknown): string => {
   const value = (extra as Record<string, unknown> | undefined)?.upstream_request_id_header
   return typeof value === 'string' ? value : ''
@@ -4077,6 +4137,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
+	openAITurnStateOverride.value = readOpenAITurnStateOverride(extra)
+	openAITurnStateAuto.value = readOpenAITurnStateAuto(extra)
 	openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
@@ -5833,6 +5895,31 @@ const handleSubmit = async () => {
         newExtra.upstream_request_id_header = nextUpstreamRequestIdHeader
       } else {
         delete newExtra.upstream_request_id_header
+      }
+      updatePayload.extra = newExtra
+    }
+
+    // turn-state 覆写同样只在改动时写回，避免快照覆盖运行态键。
+    const nextTurnStateOverride = openAITurnStateOverride.value.trim()
+    if (accountSupportsTurnStateOverride.value && nextTurnStateOverride !== readOpenAITurnStateOverride(props.account.extra)) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (nextTurnStateOverride) {
+        newExtra.openai_turn_state_override = nextTurnStateOverride
+      } else {
+        delete newExtra.openai_turn_state_override
+      }
+      updatePayload.extra = newExtra
+    }
+
+    // 自动接管开关：同样只在改动时写回。候选池等运行态键由后端维护，这里不碰。
+    if (accountSupportsTurnStateOverride.value && openAITurnStateAuto.value !== readOpenAITurnStateAuto(props.account.extra)) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (openAITurnStateAuto.value) {
+        newExtra.openai_turn_state_auto = true
+      } else {
+        delete newExtra.openai_turn_state_auto
       }
       updatePayload.extra = newExtra
     }
