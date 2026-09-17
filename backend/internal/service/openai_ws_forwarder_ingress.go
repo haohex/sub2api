@@ -991,7 +991,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// 不经过这里：桥是网关自造形态（WS 客户端 → HTTP 上游，默认关闭），它出站的
 		// turn-state 头仍是网关持有的值，不套帧内规则。
 		payload = s.guardOpenAICodexWSFrameTurnState(c, account, payload)
-		payload = applyCodexWSFrameWireProfile(c, account, payload, clientTurnState, token, originalModel)
+		payload, stateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, payload, clientTurnState, token, baseAcquireReq.Headers)
+		if !lease.Reused() {
+			stateObservation.observeHeader(lease.HandshakeHeader(openAIWSTurnStateHeader))
+		}
 		s.scheduleCodexWSSideCalls(c, account, baseAcquireReq.Headers, payload)
 		if err := writeCodexWSFrame(ctx, c, account, lease, payload, s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
@@ -1056,6 +1059,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			observeOpenAIWeeklyResetEvent(ctx, account, upstreamMessage)
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			stateObservation.observeEvent(upstreamMessage, eventType)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID

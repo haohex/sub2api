@@ -601,6 +601,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	previousCodexTurnStateConfig, previousCodexTurnStateConfigErr := CodexTurnStateProbeConfigFromExtra(account.Extra)
 	previousCodexTurnStateAccountType := account.Type
+	previousCodexTurnStateOwner := codexTurnStateOwnerIdentity(account)
 	requestedCodexTurnStateProbeRetry := false
 	if input.Extra != nil {
 		if rawRetry, ok := input.Extra[CodexTurnStateProbeRetryExtraKey]; ok {
@@ -791,9 +792,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if configErr != nil || !probeConfig.Enabled {
 			return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_DISABLED", "Codex turn-state probing must be enabled before retrying")
 		}
-		resetCodexTurnStateProbeFailures(account.Extra)
 	}
-	// Feature configuration changes, credential edits, and type changes all
+	// Feature configuration changes, credential-owner changes, and type changes all
 	// invalidate candidates. The cache itself is retained only for unrelated
 	// account edits and is always checked again against model/proxy/token data
 	// on the request path.
@@ -815,7 +815,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		!reflect.DeepEqual(previousCodexTurnStateConfig, currentCodexTurnStateConfig)) {
 		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
 		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	} else if len(input.Credentials) > 0 {
+	} else if codexTurnStateOwnerIdentity(account) != previousCodexTurnStateOwner {
 		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
 		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
 	}
@@ -995,6 +995,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	if requestedCodexTurnStateProbeRetry {
+		if err := retryCodexTurnStateProbe(ctx, s.accountRepo, id); err != nil {
+			return nil, err
+		}
+	}
+
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
@@ -1023,17 +1029,7 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 			if configErr != nil || !config.Enabled {
 				return infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_DISABLED", "Codex turn-state probing must be enabled before retrying")
 			}
-			resetCodexTurnStateProbeFailures(account.Extra)
-			cache := codexTurnStateCacheToExtra(codexTurnStateCacheFromExtra(account.Extra))
-			var cacheUpdate any
-			if cache != nil {
-				cacheUpdate = cache
-			}
-			managedUpdates := map[string]any{
-				CodexTurnStateProbeCacheExtraKey:   cacheUpdate,
-				CodexTurnStateProbeFailureExtraKey: nil,
-			}
-			return s.accountRepo.UpdateExtra(ctx, id, managedUpdates)
+			return retryCodexTurnStateProbe(ctx, s.accountRepo, id)
 		}
 	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)

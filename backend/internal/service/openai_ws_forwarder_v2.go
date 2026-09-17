@@ -352,18 +352,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 
-	var writeErr error
-	if codexDeviceWireProfileEnabled(c, account) {
-		// 双开：map 序列化是字典序且转义 HTML；按真客户端的帧字段序出站，字节原样写出。
-		// 帧内默认承载客户端自己的 clientTurnState；账号级候选命中时由发送边界覆盖。
-		raw, marshalErr := marshalOpenAIUpstreamJSON(payload)
-		if marshalErr != nil {
-			return nil, wrapOpenAIWSFallback("write_request", marshalErr)
-		}
-		writeErr = lease.WriteTextWithContextTimeout(ctx, applyCodexWSFrameWireProfile(c, account, raw, clientTurnState, token), s.openAIWSWriteTimeout())
-	} else {
-		writeErr = lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout())
+	raw, marshalErr := marshalOpenAIUpstreamJSON(payload)
+	if marshalErr != nil {
+		return nil, wrapOpenAIWSFallback("write_request", marshalErr)
 	}
+	raw, stateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, raw, clientTurnState, token, wsHeaders)
+	if !lease.Reused() {
+		stateObservation.observeHeader(lease.HandshakeHeader(openAIWSTurnStateHeader))
+	}
+	writeErr := writeCodexWSFrame(ctx, c, account, lease, raw, s.openAIWSWriteTimeout())
 	if err := writeErr; err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
@@ -635,6 +632,7 @@ readLoop:
 		if eventType == "" {
 			continue
 		}
+		stateObservation.observeEvent(message, eventType)
 		responseModelObserver.ObserveOpenAI(message, eventType)
 		eventCount++
 		if firstEventType == "" {

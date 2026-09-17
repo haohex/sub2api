@@ -301,7 +301,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	account.ApplyHeaderOverrides(req.Header)
 	// This fallback is a real ChatGPT /responses SSE request, so it follows
 	// the same account/model candidate override as the main Responses builder.
-	ApplyConfiguredCodexTurnState(account, req.Header, gjson.GetBytes(body, "model").String(), token)
+	applyConfiguredCodexTurnStateToRequest(account, req, gjson.GetBytes(body, "model").String(), token)
 	// 这条兜底打的是 /responses：双开账号的头也要按线协议投影收口，否则同一账号出现
 	// 「双开的体 + 非双开的头」两种形态（体已按双开压缩，见 compressCodexRequestBody）。
 	applyCodexDeviceWireProfile(c, account, req.Header, false)

@@ -143,6 +143,7 @@ docs/*
 !docs/conventions/
 docs/conventions/*
 !docs/conventions/release-lifecycle.md
+!docs/conventions/codex-turn-state.md
 !docs/conventions/fork-contributions.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md

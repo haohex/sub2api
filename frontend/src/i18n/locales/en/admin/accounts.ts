@@ -677,7 +677,7 @@ export default {
         codexUserAgentPlaceholder: 'Leave empty to use the global setting',
         codexTurnStateProbe: 'Codex turn-state candidate probe',
         codexTurnStateProbeDesc:
-          'Use this account token through the selected rotating proxy to probe the models in the restriction above. The probe stops after response headers; only a 292-byte X-Codex-Turn-State is cached for one hour, renewed during the final five minutes, and injected for the same model only.',
+          'Use this account token through the selected rotating proxy to probe the models in the restriction above. The probe stops after response headers; only a 292-byte X-Codex-Turn-State is cached for one hour, renewed during the final five minutes, and injected for the same model only. Each model gets up to 25 consecutive attempts with a 10-second timeout. Normal requests reporting gpt-5.6-luna, server_is_overloaded, or a 312-byte state invalidate that candidate early and trigger a new probe.',
         codexTurnStateProbeProxy: 'Probe proxy',
         codexTurnStateProbeProxyHint: 'Choose the rotating proxy used only for candidate acquisition; normal account traffic keeps its own proxy.',
         codexTurnStateProbeModels: 'Models',
@@ -690,7 +690,7 @@ export default {
         codexTurnStateProbeProxyRequired: 'Select a probe proxy',
         codexTurnStateProbeModelsRequired: 'Select or enter at least one model',
         codexTurnStateProbeLoadModelsFailed: 'Failed to load account models',
-        codexTurnStateProbeRenewalFailed: 'Candidate renewal stopped after 50 failed attempts',
+        codexTurnStateProbeRenewalFailed: 'Candidate renewal stopped after 25 failed attempts',
         codexTurnStateProbeRenewalFailedDesc: 'The following models need a manual retry:',
         codexTurnStateProbeRetry: 'Retry renewal',
         codexTurnStateProbeRetryStarted: 'Renewal retry has been scheduled',

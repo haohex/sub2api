@@ -3539,7 +3539,7 @@ const codexTurnStateProbeFailures = computed(() => {
     .filter(([, value]) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return false
       const attempts = Number((value as Record<string, unknown>).attempts)
-      return Number.isFinite(attempts) && attempts >= 50
+      return Number.isFinite(attempts) && attempts >= 25
     })
     .map(([model]) => model)
     .sort()

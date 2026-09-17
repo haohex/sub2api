@@ -79,21 +79,17 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		prewarmPayload[k] = v
 	}
 	prewarmPayload["generate"] = false
-	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
-
-	var writeErr error
-	if codexDeviceWireProfileEnabled(c, account) {
-		// 双开：预热帧与正式帧是同一个 ResponseCreateWsRequest（core/src/client.rs:1864-1884，
-		// 只是 generate=false），走同一条收口、同样字节原样写出。
-		raw, marshalErr := marshalOpenAIUpstreamJSON(prewarmPayload)
-		if marshalErr != nil {
-			return wrapOpenAIWSFallback("prewarm_write", marshalErr)
-		}
-		prewarmPayloadJSON = applyCodexWSFrameWireProfile(c, account, raw, turnState, candidateToken...)
-		writeErr = lease.WriteTextWithContextTimeout(ctx, prewarmPayloadJSON, s.openAIWSWriteTimeout())
-	} else {
-		writeErr = lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout())
+	prewarmPayloadJSON, marshalErr := marshalOpenAIUpstreamJSON(prewarmPayload)
+	if marshalErr != nil {
+		return wrapOpenAIWSFallback("prewarm_write", marshalErr)
 	}
+
+	token := ""
+	if len(candidateToken) > 0 {
+		token = candidateToken[0]
+	}
+	prewarmPayloadJSON, stateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, prewarmPayloadJSON, turnState, token, nil)
+	writeErr := writeCodexWSFrame(ctx, c, account, lease, prewarmPayloadJSON, s.openAIWSWriteTimeout())
 	if err := writeErr; err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
@@ -127,6 +123,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		}
 
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(message)
+		stateObservation.observeEvent(message, eventType)
 		if eventType == "" {
 			continue
 		}

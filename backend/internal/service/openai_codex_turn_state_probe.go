@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,8 +32,8 @@ const (
 	codexTurnStateLength              = 292
 	codexTurnStateTTL                 = time.Hour
 	codexTurnStateRefreshBeforeExpiry = 5 * time.Minute
-	codexTurnStateProbeMaxAttempts    = 50
-	codexTurnStateProbeTimeout        = 15 * time.Second
+	codexTurnStateProbeMaxAttempts    = 25
+	codexTurnStateProbeTimeout        = 10 * time.Second
 	codexTurnStateProbeRefreshPeriod  = time.Minute
 )
 
@@ -229,6 +228,7 @@ func CodexTurnStateProbeModels(account *Account) []string {
 // ApplyConfiguredCodexTurnState overwrites an outbound HTTP header when the
 // account has a fresh, exact-model candidate. The function is deliberately
 // exported so all OpenAI HTTP builders share the same final override.
+// The model argument is the final upstream model; it is never mapped again.
 func ApplyConfiguredCodexTurnState(account *Account, headers http.Header, model, token string) {
 	if headers == nil {
 		return
@@ -250,7 +250,7 @@ func configuredCodexTurnState(account *Account, model, token string, now time.Ti
 	}
 	configuredModels := CodexTurnStateProbeModels(account)
 	modelKey := codexTurnStateModelKey(account, model)
-	if modelKey == "" || !codexTurnStateConfigContainsModel(account, configuredModels, model, modelKey) {
+	if modelKey == "" || !containsString(configuredModels, modelKey) {
 		return ""
 	}
 	entry, ok := codexTurnStateCacheFromExtra(account.Extra)[modelKey]
@@ -290,9 +290,6 @@ func codexTurnStateModelKey(account *Account, model string) string {
 		return ""
 	}
 	if account != nil {
-		if mapped := strings.TrimSpace(account.GetMappedModel(model)); mapped != "" {
-			model = mapped
-		}
 		if account.TargetsChatGPTCodexUpstream() {
 			model = normalizeOpenAIModelForUpstream(account, model)
 		}
@@ -413,14 +410,14 @@ func codexTurnStateProbeFailuresFromExtra(extra map[string]any) map[string]codex
 			continue
 		}
 		attempts, ok := positiveInt64Extra(values["attempts"])
-		if !ok || attempts > int64(codexTurnStateProbeMaxAttempts) {
+		if !ok {
 			continue
 		}
 		failedAt, ok := parseCodexTurnStateTime(values["failed_at"])
 		if !ok {
 			continue
 		}
-		result[model] = codexTurnStateProbeFailure{Attempts: int(attempts), FailedAt: failedAt}
+		result[model] = codexTurnStateProbeFailure{Attempts: int(min(attempts, int64(codexTurnStateProbeMaxAttempts))), FailedAt: failedAt}
 	}
 	return result
 }
@@ -439,39 +436,9 @@ func codexTurnStateProbeFailuresToExtra(failures map[string]codexTurnStateProbeF
 	return result
 }
 
-func resetCodexTurnStateProbeFailures(extra map[string]any) {
-	if extra == nil {
-		return
-	}
-	failures := codexTurnStateProbeFailuresFromExtra(extra)
-	cache := codexTurnStateCacheFromExtra(extra)
-	for model := range failures {
-		delete(cache, model)
-	}
-	if encoded := codexTurnStateCacheToExtra(cache); encoded == nil {
-		delete(extra, CodexTurnStateProbeCacheExtraKey)
-	} else {
-		extra[CodexTurnStateProbeCacheExtraKey] = encoded
-	}
-	delete(extra, CodexTurnStateProbeFailureExtraKey)
-}
-
 func containsString(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-func codexTurnStateConfigContainsModel(account *Account, configured []string, requested, modelKey string) bool {
-	requested = strings.TrimSpace(requested)
-	if containsString(configured, requested) || containsString(configured, modelKey) {
-		return true
-	}
-	for _, model := range configured {
-		if codexTurnStateModelKey(account, model) == modelKey {
 			return true
 		}
 	}
@@ -489,6 +456,7 @@ type CodexTurnStateProbeService struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 	stopCh    chan struct{}
+	wakeCh    chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -508,6 +476,7 @@ func NewCodexTurnStateProbeService(
 		tokenProvider: tokenProvider,
 		httpUpstream:  httpUpstream,
 		stopCh:        make(chan struct{}),
+		wakeCh:        make(chan struct{}, 1),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -552,6 +521,8 @@ func (s *CodexTurnStateProbeService) run() {
 	for {
 		select {
 		case <-ticker.C:
+			s.refreshOnce(ctx)
+		case <-s.wakeCh:
 			s.refreshOnce(ctx)
 		case <-s.stopCh:
 			return
@@ -611,71 +582,32 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 	}
 	for model, entry := range oldCache {
 		modelKey := codexTurnStateModelKey(account, model)
-		if modelKey == "" || !codexTurnStateConfigContainsModel(account, models, model, modelKey) || !validCodexTurnStateCacheMetadata(entry, config.ProxyID, now) {
+		if modelKey == "" || !containsString(models, modelKey) || !validCodexTurnStateCacheMetadata(entry, config.ProxyID, now) {
 			continue
 		}
 		cache[modelKey] = entry
 	}
-	persistCache := func() error {
-		if reflect.DeepEqual(oldCache, cache) {
+	persistResults := func() error {
+		if codexTurnStateProbeRuntimeUnchanged(account, cache, failures) {
 			return nil
 		}
-		encoded := codexTurnStateCacheToExtra(cache)
-		var cacheUpdate any
-		if encoded != nil {
-			cacheUpdate = encoded
-		}
-		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{CodexTurnStateProbeCacheExtraKey: cacheUpdate}); err != nil {
-			return err
-		}
-		if account.Extra == nil {
-			account.Extra = make(map[string]any)
-		}
-		if encoded == nil {
-			delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-		} else {
-			account.Extra[CodexTurnStateProbeCacheExtraKey] = encoded
-		}
-		return nil
+		_, err := saveCodexTurnStateProbeRuntime(ctx, s.accountRepo, account, codexTurnStateProbeRuntimeUpdates(cache, failures))
+		return err
 	}
-	persistFailures := func() error {
-		if reflect.DeepEqual(oldFailures, failures) {
-			return nil
-		}
-		encoded := codexTurnStateProbeFailuresToExtra(failures)
-		var failureUpdate any
-		if encoded != nil {
-			failureUpdate = encoded
-		}
-		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{CodexTurnStateProbeFailureExtraKey: failureUpdate}); err != nil {
-			return err
-		}
-		if account.Extra == nil {
-			account.Extra = make(map[string]any)
-		}
-		if encoded == nil {
-			delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		} else {
-			account.Extra[CodexTurnStateProbeFailureExtraKey] = encoded
-		}
-		return nil
-	}
+
 	if len(models) == 0 {
-		if err := persistCache(); err != nil {
-			return err
-		}
-		return persistFailures()
+		return persistResults()
 	}
 
 	proxy, err := s.proxyRepo.GetByID(ctx, config.ProxyID)
 	if err != nil {
-		if persistErr := persistCache(); persistErr != nil {
+		if persistErr := persistResults(); persistErr != nil {
 			slog.Warn("codex_turn_state_probe_cache_cleanup_failed", "account_id", account.ID, "error", persistErr)
 		}
 		return err
 	}
 	if proxy == nil || !proxy.IsActive() || proxy.IsExpired(now) {
-		if persistErr := persistCache(); persistErr != nil {
+		if persistErr := persistResults(); persistErr != nil {
 			slog.Warn("codex_turn_state_probe_cache_cleanup_failed", "account_id", account.ID, "error", persistErr)
 		}
 		return fmt.Errorf("probe proxy %d is unavailable", config.ProxyID)
@@ -685,7 +617,7 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 		// Keep structurally valid, unexpired entries when the token provider is
 		// temporarily unavailable. The request path still verifies the hash
 		// against the actual token, and the next scan can refresh the cache.
-		if persistErr := persistCache(); persistErr != nil {
+		if persistErr := persistResults(); persistErr != nil {
 			slog.Warn("codex_turn_state_probe_cache_cleanup_failed", "account_id", account.ID, "error", persistErr)
 		}
 		return err
@@ -731,10 +663,7 @@ func (s *CodexTurnStateProbeService) refreshAccount(ctx context.Context, account
 		}
 	}
 
-	if err := persistCache(); err != nil {
-		return err
-	}
-	return persistFailures()
+	return persistResults()
 }
 
 func (s *CodexTurnStateProbeService) accountLock(accountID int64) *sync.Mutex {
@@ -853,4 +782,15 @@ func (s *CodexTurnStateProbeService) probeOnce(
 		return "", time.Time{}, fmt.Errorf("upstream state length %d, want %d", len(state), codexTurnStateLength)
 	}
 	return state, time.Now().UTC(), nil
+}
+
+// Wake schedules an early scan without interrupting the serial probe loop.
+func (s *CodexTurnStateProbeService) Wake() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.wakeCh <- struct{}{}:
+	default:
+	}
 }

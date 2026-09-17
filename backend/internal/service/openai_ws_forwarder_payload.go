@@ -266,22 +266,23 @@ const codexWSStreamRequestStartKey = "x-codex-ws-stream-request-start-ms"
 //
 // client_metadata 存在但不是对象时不往里塞键（sjson 会把标量整个换成对象）。
 func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []byte, turnState string, candidateArgs ...string) []byte {
-	if !codexDeviceWireProfileEnabled(c, account) {
-		return payload
-	}
+	deviceProfile := codexDeviceWireProfileEnabled(c, account)
 	if eventType := gjson.GetBytes(payload, "type").String(); eventType != "" && eventType != "response.create" {
 		return payload
 	}
 	configuredState := ""
 	if len(candidateArgs) > 0 {
 		model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
-		if len(candidateArgs) > 1 && strings.TrimSpace(candidateArgs[1]) != "" {
+		if model == "" && len(candidateArgs) > 1 && strings.TrimSpace(candidateArgs[1]) != "" {
 			model = strings.TrimSpace(candidateArgs[1])
 		}
 		configuredState = configuredCodexTurnState(account, model, candidateArgs[0], time.Now())
 		if configuredState != "" {
 			turnState = configuredState
 		}
+	}
+	if !deviceProfile && configuredState == "" {
+		return payload
 	}
 	if meta := gjson.GetBytes(payload, "client_metadata"); !meta.Exists() || meta.IsObject() {
 		if turnState = strings.TrimSpace(turnState); turnState != "" {
@@ -290,8 +291,14 @@ func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []by
 				payload = setCodexWSClientMetadataString(payload, openAICodexTurnStateHeader, turnState)
 			}
 		}
+		if !deviceProfile {
+			return payload
+		}
 		payload = setCodexWSClientMetadataString(payload, codexWSStreamRequestStartKey,
 			strconv.FormatInt(time.Now().UnixMilli(), 10))
+	}
+	if !deviceProfile {
+		return payload
 	}
 	timezone := codexWireTimezoneName(account)
 	payload = rewriteCodexEnvironmentTimezoneWithName(timezone, payload)

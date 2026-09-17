@@ -777,6 +777,12 @@ func lockAndMergeAccountProbeExtra(
 			}
 		}
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := preserveCodexTurnStateProbeRuntime(ctx, client, account, extra); err != nil {
+		return nil, err
+	}
 	return extra, nil
 }
 

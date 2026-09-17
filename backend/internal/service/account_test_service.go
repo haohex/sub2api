@@ -933,7 +933,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
-	ApplyConfiguredCodexTurnState(credentialAccount, req.Header, upstreamTestModelID, authToken)
+	applyConfiguredCodexTurnStateToRequest(credentialAccount, req, upstreamTestModelID, authToken)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -2295,7 +2295,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
-	ApplyConfiguredCodexTurnState(credentialAccount, req.Header, testModelID, authToken)
+	applyConfiguredCodexTurnStateToRequest(credentialAccount, req, testModelID, authToken)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
