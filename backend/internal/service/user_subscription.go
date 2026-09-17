@@ -6,7 +6,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
-const subscriptionDayDuration = 24 * time.Hour
+const (
+	subscriptionDayDuration      = 24 * time.Hour
+	subscriptionFiveHourDuration = 5 * time.Hour
+)
 
 type UserSubscription struct {
 	ID      int64
@@ -17,13 +20,16 @@ type UserSubscription struct {
 	ExpiresAt time.Time
 	Status    string
 
-	DailyWindowStart   *time.Time
-	WeeklyWindowStart  *time.Time
-	MonthlyWindowStart *time.Time
+	DailyWindowStart    *time.Time
+	WeeklyWindowStart   *time.Time
+	MonthlyWindowStart  *time.Time
+	FiveHourWindowStart *time.Time
 
-	DailyUsageUSD   float64
-	WeeklyUsageUSD  float64
-	MonthlyUsageUSD float64
+	DailyUsageUSD           float64
+	WeeklyUsageUSD          float64
+	MonthlyUsageUSD         float64
+	FiveHourUsageUSD        float64
+	QuotaFollowResetEventID int64
 
 	AssignedBy *int64
 	AssignedAt time.Time
@@ -138,6 +144,14 @@ func (s *UserSubscription) canAutomaticallyResetMonthlyAt(now time.Time) bool {
 	return ok
 }
 
+func (s *UserSubscription) NeedsFiveHourResetAt(now time.Time) bool {
+	return s != nil && s.FiveHourWindowStart != nil && !now.Before(s.FiveHourWindowStart.Add(subscriptionFiveHourDuration))
+}
+
+func (s *UserSubscription) NeedsFiveHourReset() bool {
+	return s.NeedsFiveHourResetAt(time.Now())
+}
+
 // windowResetAnchor 返回周/月窗口实际推进所依据的锚点。
 // 早期订阅把首个窗口初始化在开通日零点；只有这个初始值是无歧义的，之后出现的
 // 零点锚点可能来自手动重置，必须保持权威。
@@ -204,6 +218,14 @@ func (s *UserSubscription) MonthlyResetTime() *time.Time {
 	return &t
 }
 
+func (s *UserSubscription) FiveHourResetTime() *time.Time {
+	if s == nil || s.FiveHourWindowStart == nil {
+		return nil
+	}
+	t := s.FiveHourWindowStart.Add(subscriptionFiveHourDuration)
+	return &t
+}
+
 func (s *UserSubscription) CheckDailyLimit(group *Group, additionalCost float64) bool {
 	if !group.HasDailyLimit() {
 		return true
@@ -223,6 +245,17 @@ func (s *UserSubscription) CheckMonthlyLimit(group *Group, additionalCost float6
 		return true
 	}
 	return s.MonthlyUsageUSD+additionalCost <= *group.MonthlyLimitUSD
+}
+
+func (s *UserSubscription) CheckFiveHourLimit(group *Group, additionalCost float64) bool {
+	if !group.HasFiveHourLimit() {
+		return true
+	}
+	usage := s.FiveHourUsageUSD
+	if s.NeedsFiveHourReset() {
+		usage = 0
+	}
+	return usage+additionalCost <= *group.FiveHourLimitUSD
 }
 
 func (s *UserSubscription) CheckAllLimits(group *Group, additionalCost float64) (daily, weekly, monthly bool) {

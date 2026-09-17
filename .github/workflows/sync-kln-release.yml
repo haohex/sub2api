@@ -1,0 +1,195 @@
+name: Sync latest KlN release to main
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional KlN release tag; empty means the latest stable release'
+        required: false
+        type: string
+
+concurrency:
+  group: sync-kln-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  SOURCE_REPO: KlN-4096/sub2api
+  BASE_BRANCH: main
+  SYNC_BRANCH_PREFIX: sync/kln-release
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a token that triggers PR checks
+        env:
+          SYNC_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          test -n "$SYNC_TOKEN" || {
+            echo '::error::Configure RELEASE_TOKEN so automated sync PRs can run required checks'
+            exit 1
+          }
+
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Preserve trusted merge helper
+        run: cp tools/release/merge-sync-main.sh "$RUNNER_TEMP/merge-sync-main.sh"
+
+      - name: Resolve KlN release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          release_json=$(mktemp)
+          if [ -n "$RELEASE_TAG_INPUT" ]; then
+            if [[ ! "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-klno\.[0-9]+$ ]]; then
+              echo "::error::unexpected KlN release tag input: $RELEASE_TAG_INPUT"
+              exit 1
+            fi
+            gh api "repos/${SOURCE_REPO}/releases/tags/${RELEASE_TAG_INPUT}" > "$release_json"
+          else
+            gh api "repos/${SOURCE_REPO}/releases/latest" > "$release_json"
+          fi
+
+          tag=$(jq -r '.tag_name // empty' "$release_json")
+          if ! jq -e '.draft == false and .prerelease == false' "$release_json" >/dev/null; then
+            echo "::error::the selected KlN release is not a published stable release"
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-klno\.[0-9]+$ ]]; then
+            echo "::error::unexpected KlN release tag: $tag"
+            exit 1
+          fi
+
+          python3 - "$tag" > release-body.md <<'PYBODY'
+          import sys
+          tag = sys.argv[1]
+          print(f"同步 KlN 正式版本 `{tag}`。")
+          print(f"\n上游发布：https://github.com/KlN-4096/sub2api/releases/tag/{tag}")
+          print("\n工作流会自动合入 main；如有冲突，请在此分支处理，保留本仓库发布工作流和约定。")
+          print("核对 VERSION 的基础版本与上游 tag 一致；所有必需检查通过后，手动使用 Create a merge commit 合并。")
+          print("合并后自动发布完整安装包与多架构镜像，无需手动创建 tag 或 Release。")
+          print("\nRefs #13")
+          PYBODY
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'branch=%s/%s\n' "$SYNC_BRANCH_PREFIX" "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing KlN sync PR
+        id: state
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+
+          open_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --state open \
+            --limit 1000 \
+            --json number,headRefName,isCrossRepository |
+            jq -r --arg prefix "${SYNC_BRANCH_PREFIX}/" \
+              '[.[] | select(.isCrossRepository == false) | select(.headRefName | startswith($prefix))] | .[0].number // empty')
+          if [ -n "$open_pr" ]; then
+            branch=$(gh pr view "$open_pr" --repo "$REPOSITORY" --json headRefName --jq .headRefName)
+            git fetch --no-tags origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
+              "refs/heads/${branch}:refs/remotes/origin/${branch}"
+            git switch --create "$branch" "refs/remotes/origin/${branch}"
+            bash "$RUNNER_TEMP/merge-sync-main.sh"
+            git push origin "HEAD:refs/heads/${branch}"
+            echo "Updated existing KlN sync PR #$open_pr where conflict-free"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --state all \
+            --json number,state,mergedAt |
+            jq -r '.[0].number // empty')
+          if [ -n "$existing_pr" ]; then
+            echo "Release $TAG already has PR #$existing_pr; no duplicate will be created"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare release branch
+        id: prepare
+        if: steps.state.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          git remote add kln "https://github.com/${SOURCE_REPO}.git"
+          git fetch --force --no-tags kln "refs/tags/${TAG}:refs/tags/${TAG}"
+
+          release_sha=$(git rev-parse "${TAG}^{}")
+          base_sha=$(git rev-parse "origin/${BASE_BRANCH}")
+          if git merge-base --is-ancestor "$release_sha" "$base_sha"; then
+            echo "Release $TAG is already included in $BASE_BRANCH"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+            branch_sha=$(git rev-parse "refs/remotes/origin/${BRANCH}")
+            if ! git merge-base --is-ancestor "$release_sha" "$branch_sha"; then
+              echo "::error::existing branch $BRANCH does not contain $TAG; refusing to overwrite it"
+              exit 1
+            fi
+            echo "Reusing existing branch $BRANCH"
+            git switch --create "$BRANCH" "$branch_sha"
+          else
+            git switch --create "$BRANCH" "$release_sha"
+          fi
+          bash "$RUNNER_TEMP/merge-sync-main.sh"
+          git push --set-upstream origin "$BRANCH"
+
+      - name: Create review PR
+        if: steps.state.outputs.skip != 'true' && steps.prepare.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          set -euo pipefail
+          existing_pr=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --state all \
+            --json number |
+            jq -r '.[0].number // empty')
+          if [ -n "$existing_pr" ]; then
+            echo "PR #$existing_pr already exists"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --title "ci(上游同步): 同步 KlN 正式版本 $TAG" \
+            --body-file release-body.md

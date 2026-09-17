@@ -103,6 +103,7 @@ type Group struct {
 	DailyLimitUSD             *float64 `json:"daily_limit_usd"`
 	WeeklyLimitUSD            *float64 `json:"weekly_limit_usd"`
 	MonthlyLimitUSD           *float64 `json:"monthly_limit_usd"`
+	FiveHourLimitUSD          *float64 `json:"five_hour_limit_usd"`
 	LongContextPricingEnabled bool     `json:"long_context_pricing_enabled"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
@@ -166,6 +167,11 @@ type Group struct {
 // 注意：普通用户接口不得返回 model_routing/account_count/account_groups 等内部信息。
 type AdminGroup struct {
 	Group
+	QuotaResetSourceAccountID   *int64     `json:"quota_reset_source_account_id"`
+	QuotaResetSourceAccountName string     `json:"quota_reset_source_account_name"`
+	QuotaResetSourceResetAt     *time.Time `json:"quota_reset_source_reset_at"`
+	QuotaResetIncludeMonthly    bool       `json:"quota_reset_include_monthly"`
+	QuotaResetSourceStatus      string     `json:"quota_reset_source_status"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
 	ForceOpenAIFast bool `json:"force_openai_fast"`
 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。
@@ -765,9 +771,11 @@ type UserSubscription struct {
 	WeeklyWindowStart  *time.Time `json:"weekly_window_start"`
 	MonthlyWindowStart *time.Time `json:"monthly_window_start"`
 
-	DailyUsageUSD   float64 `json:"daily_usage_usd"`
-	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
-	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
+	DailyUsageUSD       float64    `json:"daily_usage_usd"`
+	WeeklyUsageUSD      float64    `json:"weekly_usage_usd"`
+	MonthlyUsageUSD     float64    `json:"monthly_usage_usd"`
+	FiveHourWindowStart *time.Time `json:"five_hour_window_start"`
+	FiveHourUsageUSD    float64    `json:"five_hour_usage_usd"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
