@@ -534,7 +534,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	// 客户端回带的 turn-state：已知由其他账号铸造（failover 换号）则剥离。
 	turnState := s.guardOpenAICodexTurnStateValue(c, account, c.GetHeader(openAIWSTurnStateHeader))
-	// clientTurnState 只保存"客户端自己持有的值"，双开的帧内只承载它：真客户端的 turn_state
+	// clientTurnState 默认保存"客户端自己持有的值"，双开的帧内沿用该语义；命中账号级候选时
+	// 发送边界会覆盖成当前账号/模型的 state。真客户端的 turn_state
 	// 是每轮新建的 OnceLock（core/src/client.rs:292、:522-526），只可能来自本轮上游的
 	// response.metadata 事件；网关握手铸出的值、会话存储里的旧值客户端从未收到过，复用连接
 	// 开新一轮时真客户端首帧确实不带（core/tests/suite/turn_state.rs:140、:152 断言 null）。
@@ -952,7 +953,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
 			}
 			// 双开：握手不带 turn-state（client.rs:1241 传 None），后续拨号同样不能带；
-			// 帧内只承载客户端自己的值（clientTurnState），网关铸出的不进帧。
+			// 帧内默认承载客户端自己的值，命中账号级候选时由帧收口覆盖。
 			if !codexDeviceWireProfileEnabled(c, account) {
 				updatedHeaders := cloneHeader(baseAcquireReq.Headers)
 				if updatedHeaders == nil {
@@ -990,7 +991,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// 不经过这里：桥是网关自造形态（WS 客户端 → HTTP 上游，默认关闭），它出站的
 		// turn-state 头仍是网关持有的值，不套帧内规则。
 		payload = s.guardOpenAICodexWSFrameTurnState(c, account, payload)
-		payload = applyCodexWSFrameWireProfile(c, account, payload, clientTurnState)
+		payload = applyCodexWSFrameWireProfile(c, account, payload, clientTurnState, token, originalModel)
 		s.scheduleCodexWSSideCalls(c, account, baseAcquireReq.Headers, payload)
 		if err := writeCodexWSFrame(ctx, c, account, lease, payload, s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(

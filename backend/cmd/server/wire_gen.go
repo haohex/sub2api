@@ -207,6 +207,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	pluginHostInfo := providePluginHostInfo(buildInfo)
 	pluginManager := service.NewPluginManager(pluginRepository, secretEncryptor, configConfig, pluginHostInfo)
 	accountTestService := service.ProvideAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, grokTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService, openAIGatewayService, settingService, pluginManager)
+	codexTurnStateProbeService := service.ProvideCodexTurnStateProbeService(accountRepository, proxyRepository, openAITokenProvider, httpUpstream)
 	crsSyncService := service.NewCRSSyncService(accountRepository, proxyRepository, oAuthService, openAIOAuthService, geminiOAuthService, configConfig)
 	accountHandler := admin.ProvideAccountHandler(configConfig, adminService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, compositeTokenCacheInvalidator, grokQuotaService)
 	adminAnnouncementHandler := admin.NewAnnouncementHandler(announcementService)
@@ -351,7 +352,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	openAIGroupQuotaFollowResetRepository := repository.NewOpenAIGroupQuotaFollowResetRepository(client, db)
 	openAIGroupQuotaFollowResetService := service.ProvideOpenAIGroupQuotaFollowResetService(openAIGroupQuotaFollowResetRepository, billingCacheService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, openAIGroupQuotaFollowResetService, promptService, pluginManager)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, openAIGroupQuotaFollowResetService, codexTurnStateProbeService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -438,6 +439,7 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	openAIQuotaFollowReset *service.OpenAIGroupQuotaFollowResetService,
+	codexTurnStateProbe *service.CodexTurnStateProbeService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
@@ -466,6 +468,12 @@ func provideCleanup(
 			{"OpenAIGroupQuotaFollowResetService", func() error {
 				if openAIQuotaFollowReset != nil {
 					openAIQuotaFollowReset.Stop()
+				}
+				return nil
+			}},
+			{"CodexTurnStateProbeService", func() error {
+				if codexTurnStateProbe != nil {
+					codexTurnStateProbe.Stop()
 				}
 				return nil
 			}},

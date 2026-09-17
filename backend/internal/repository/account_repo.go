@@ -67,6 +67,8 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
+	service.CodexTurnStateProbeCacheExtraKey:   {},
+	service.CodexTurnStateProbeFailureExtraKey: {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -2645,6 +2647,10 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
+	cacheUpdate, hasCacheUpdate := updates[service.CodexTurnStateProbeCacheExtraKey]
+	clearCodexTurnStateCache := hasCacheUpdate && cacheUpdate == nil
+	failureUpdate, hasFailureUpdate := updates[service.CodexTurnStateProbeFailureExtraKey]
+	clearCodexTurnStateFailures := hasFailureUpdate && failureUpdate == nil
 	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -2665,6 +2671,12 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
+	}
+	if clearCodexTurnStateCache {
+		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeCacheExtraKey + "'"
+	}
+	if clearCodexTurnStateFailures {
+		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeFailureExtraKey + "'"
 	}
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)

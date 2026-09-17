@@ -594,6 +594,11 @@ export async function setSchedulable(id: number, schedulable: boolean): Promise<
   return data
 }
 
+export async function retryCodexTurnStateProbe(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/codex-turn-state-probe/retry`)
+  return data
+}
+
 /**
  * Get available models for an account
  * @param id - Account ID
@@ -1099,6 +1104,7 @@ export const accountsAPI = {
   getTempUnschedulableStatus,
   resetTempUnschedulable,
   setSchedulable,
+  retryCodexTurnStateProbe,
   getAvailableModels,
   syncUpstreamModels,
   syncUpstreamModelsPreview,

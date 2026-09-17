@@ -71,7 +71,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnState = s.guardOpenAICodexTurnStateValue(c, account, c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
-	// 帧内只承载客户端自己持有的值（理由见 ingress 的 clientTurnState 注释）。
+	// 帧内默认只承载客户端自己持有的值；发送边界若命中账号级候选，则由候选覆盖。
 	clientTurnState := turnState
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
@@ -347,6 +347,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		account,
 		stateStore,
 		groupID,
+		token,
 	); err != nil {
 		return nil, err
 	}
@@ -354,13 +355,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	var writeErr error
 	if codexDeviceWireProfileEnabled(c, account) {
 		// 双开：map 序列化是字典序且转义 HTML；按真客户端的帧字段序出站，字节原样写出。
-		// 帧内只承载客户端自己持有的 clientTurnState；会话存储回落值（turnState）只用于
-		// 非双开的握手与 HTTP 桥。
+		// 帧内默认承载客户端自己的 clientTurnState；账号级候选命中时由发送边界覆盖。
 		raw, marshalErr := marshalOpenAIUpstreamJSON(payload)
 		if marshalErr != nil {
 			return nil, wrapOpenAIWSFallback("write_request", marshalErr)
 		}
-		writeErr = lease.WriteTextWithContextTimeout(ctx, applyCodexWSFrameWireProfile(c, account, raw, clientTurnState), s.openAIWSWriteTimeout())
+		writeErr = lease.WriteTextWithContextTimeout(ctx, applyCodexWSFrameWireProfile(c, account, raw, clientTurnState, token), s.openAIWSWriteTimeout())
 	} else {
 		writeErr = lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout())
 	}

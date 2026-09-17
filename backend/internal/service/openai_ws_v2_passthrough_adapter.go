@@ -1131,7 +1131,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if policyErr == nil && blocked == nil && isResponseCreate {
 				// 双开：后续帧的发送边界，与首帧同一收口。
 				out = s.guardOpenAICodexWSFrameTurnState(c, account, out)
-				out = applyCodexWSFrameWireProfile(c, account, out, turnState)
+				out = applyCodexWSFrameWireProfile(c, account, out, turnState, token, model)
 				s.scheduleCodexWSSideCalls(c, account, headers, out)
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
@@ -1160,7 +1160,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	// 双开：首帧的发送边界——turn-state 走帧内、字段序对齐真客户端（握手上已被投影删掉）。
 	firstClientMessage = s.guardOpenAICodexWSFrameTurnState(c, account, firstClientMessage)
-	firstClientMessage = applyCodexWSFrameWireProfile(c, account, firstClientMessage, turnState)
+	firstClientMessage = applyCodexWSFrameWireProfile(c, account, firstClientMessage, turnState, token, requestModel)
 	s.scheduleCodexWSSideCalls(c, account, headers, firstClientMessage)
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()

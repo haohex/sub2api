@@ -1,5 +1,16 @@
 # 开发日志
 
+## 2026-09-17：账号级 Codex turn-state 候选探测与按模型注入
+
+- 为 OpenAI OAuth/Setup Token 账号增加受管配置：选择探测代理；模型集合自动取账号模型限制中的实际上游 ID，后台按账号顺序逐模型发送 Responses SSE 探测，收到响应头即关闭流，单模型每轮最多尝试 50 次。
+- 仅接受 HTTP 200 且 `X-Codex-Turn-State` 原始值长度恰为 292 的候选；按账号、实际模型、探测代理和 token 指纹缓存，TTL 固定 1 小时，并在到期前 300 秒通过动态代理自动续期，状态缓存进入调度快照但不进入管理端 DTO。
+- 续期探测失败时保留仍未过期的旧 state；只有候选真正过期或校验失效才淘汰，避免短暂代理/token 故障造成提前降级。
+- 单模型连续 50 次失败后持久化失败状态并暂停该模型的后台尝试；管理端显示失败模型和“继续续期”按钮，手动重置该模型失败预算后由后台继续，失败状态按模型独立计数。
+- 重试接口使用专用管理端路由清理失败计数和候选缓存，避免空缓存以 `null` 形式残留在 JSONB；失败/缓存状态不进入导出或普通编辑输入。
+- 普通 HTTP、透传 HTTP、Responses fallback 以及非设备型 WS 出站在最终请求阶段覆盖该账号/模型的候选 header；设备型 WS 则在最终帧的 `client_metadata.x-codex-turn-state` 覆盖。专用 alpha/search、API-key、CPR 和其他非 ChatGPT Codex 协议不注入；候选未命中、过期或 token 不一致时不注入，模型之间不复用。
+- 前端账号编辑页增加代理选择，并复用上方模型白名单/映射（Setup Token 同样显示模型限制）；不再提供独立模型选择或手工输入。新增缓存/失败状态脱敏、导出过滤、调度快照和账号复制边界，避免原始 state 泄露或复制到其他账号。
+- 验证：Docker 开发环境构建通过（前端 i18n 3 项、`vue-tsc`、Vite、Go embed 编译），新增 service/DTO/账号导出定向 Go 单测通过，容器 `/health` 返回 ok；未发起真实上游请求。宿主机仍没有 `go/gofmt` 和前端依赖，`docs/conventions/codex-outbound-identity.md` 仍缺失，本次按已有 Codex wire 实现接入。
+
 ## 2026-09-16：解决 KlN v0.2.5-klno.2 同步冲突（PR #21）
 
 - 将最新 main 合入同步分支，保留上游 Release 与 main 的祖先关系；16 个显式冲突按新版应用实现与本仓库发布约定分别处理。

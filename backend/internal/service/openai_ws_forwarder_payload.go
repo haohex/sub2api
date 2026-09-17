@@ -202,6 +202,12 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	account.ApplyHeaderOverrides(headers)
 	setOpenAICodexRoutingHint(headers, account, routingModel, routingServiceTier)
 	applyCodexDeviceWireProfile(c, account, headers, true)
+	// Device-wire accounts deliberately keep turn-state in frame metadata and
+	// must not receive it on the handshake. Other WS modes use the same final
+	// account/model override as HTTP requests.
+	if !codexDeviceWireProfileEnabled(c, account) {
+		ApplyConfiguredCodexTurnState(account, headers, routingModel, token)
+	}
 	logOpenAIRoutingDiagnostics(
 		ctx,
 		account,
@@ -251,25 +257,36 @@ const codexWSStreamRequestStartKey = "x-codex-ws-stream-request-start-ms"
 
 // applyCodexWSFrameWireProfile 是双开账号 response.create 帧的收口，三条 WS 路径
 // （ctx_pool ingress / v2 / passthrough）与 v2 预热帧都在各自的发送边界调用：
-//  1. 客户端自己持有的 turn-state 放进 client_metadata——真客户端的位置（core/src/client.rs:
-//     1792-1793，OnceLock 有值才带），握手上不带（client.rs:1241）。帧自带的不覆盖，没有值不补；
-//     网关自己铸出/存储的值不进帧（真客户端拿不到那些值，见调用方 clientTurnState 注释）。
+//  1. turn-state 放进 client_metadata——真客户端的位置（core/src/client.rs:
+//     1792-1793，OnceLock 有值才带），握手上不带（client.rs:1241）。客户端自带值通常不覆盖；
+//     但账号级候选 state 命中时，候选是本账号/本模型的最终值，必须覆盖帧内旧值。
 //  2. 发送前无条件盖 x-codex-ws-stream-request-start-ms，与真客户端每次 attempt 重盖一致；
 //     转发客户端原帧时也重盖：那个戳记的是客户端到网关那一跳，出站这一跳的时刻才是上游读到的。
 //  3. 顶层字段按 ResponseCreateWsRequest 声明序（codex-api/src/common.rs:334-363）。
 //
 // client_metadata 存在但不是对象时不往里塞键（sjson 会把标量整个换成对象）。
-func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []byte, turnState string) []byte {
+func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []byte, turnState string, candidateArgs ...string) []byte {
 	if !codexDeviceWireProfileEnabled(c, account) {
 		return payload
 	}
 	if eventType := gjson.GetBytes(payload, "type").String(); eventType != "" && eventType != "response.create" {
 		return payload
 	}
+	configuredState := ""
+	if len(candidateArgs) > 0 {
+		model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+		if len(candidateArgs) > 1 && strings.TrimSpace(candidateArgs[1]) != "" {
+			model = strings.TrimSpace(candidateArgs[1])
+		}
+		configuredState = configuredCodexTurnState(account, model, candidateArgs[0], time.Now())
+		if configuredState != "" {
+			turnState = configuredState
+		}
+	}
 	if meta := gjson.GetBytes(payload, "client_metadata"); !meta.Exists() || meta.IsObject() {
 		if turnState = strings.TrimSpace(turnState); turnState != "" {
 			existing := gjson.GetBytes(payload, "client_metadata."+openAICodexTurnStateHeader)
-			if existing.Type != gjson.String || strings.TrimSpace(existing.Str) == "" {
+			if configuredState != "" || existing.Type != gjson.String || strings.TrimSpace(existing.Str) == "" {
 				payload = setCodexWSClientMetadataString(payload, openAICodexTurnStateHeader, turnState)
 			}
 		}

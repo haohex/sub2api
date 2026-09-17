@@ -32,6 +32,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	account *Account,
 	stateStore OpenAIWSStateStore,
 	groupID int64,
+	candidateToken ...string,
 ) error {
 	if s == nil {
 		return nil
@@ -88,7 +89,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		if marshalErr != nil {
 			return wrapOpenAIWSFallback("prewarm_write", marshalErr)
 		}
-		prewarmPayloadJSON = applyCodexWSFrameWireProfile(c, account, raw, turnState)
+		prewarmPayloadJSON = applyCodexWSFrameWireProfile(c, account, raw, turnState, candidateToken...)
 		writeErr = lease.WriteTextWithContextTimeout(ctx, prewarmPayloadJSON, s.openAIWSWriteTimeout())
 	} else {
 		writeErr = lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout())

@@ -1588,6 +1588,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	applyCodexDeviceWireProfile(c, account, req.Header, false)
+	// Account-level Codex turn-state candidates are the final override. This
+	// intentionally runs after client echo guards and header overrides so the
+	// configured account/model candidate cannot be replaced by an inbound value.
+	ApplyConfiguredCodexTurnState(account, req.Header, gjson.GetBytes(body, "model").String(), token)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
 	// 侧信道：按真客户端节奏补一条只读 GET settings/user（openai_codex_side_calls.go）。

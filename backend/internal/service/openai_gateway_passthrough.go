@@ -777,6 +777,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	applyCodexDeviceWireProfile(c, account, req.Header, false)
+	// The account/model candidate is authoritative for this feature and must
+	// override any client-carried turn-state on the final outbound request.
+	ApplyConfiguredCodexTurnState(account, req.Header, gjson.GetBytes(body, "model").String(), token)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
 	// 侧信道：按真客户端节奏补一条只读 GET settings/user（openai_codex_side_calls.go）。

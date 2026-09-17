@@ -97,6 +97,26 @@ func buildProxyKey(protocol, host string, port int, username, password string) s
 	return fmt.Sprintf("%s|%s|%d|%s|%s", strings.TrimSpace(protocol), strings.TrimSpace(host), port, strings.TrimSpace(username), strings.TrimSpace(password))
 }
 
+func accountExtraForDataExport(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	filtered := make(map[string]any, len(extra))
+	for key, value := range extra {
+		if key == service.CodexTurnStateProbeCacheExtraKey ||
+			key == service.CodexTurnStateProbeFailureExtraKey ||
+			key == service.CodexTurnStateProbeRetryExtraKey ||
+			key == service.CodexTurnStateProbeModelsExtraKey {
+			continue
+		}
+		filtered[key] = value
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
 func (h *AccountHandler) ExportData(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -205,7 +225,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			Platform:           acc.Platform,
 			Type:               acc.Type,
 			Credentials:        acc.Credentials,
-			Extra:              acc.Extra,
+			Extra:              accountExtraForDataExport(acc.Extra),
 			ProxyKey:           proxyKey,
 			Concurrency:        acc.Concurrency,
 			Priority:           acc.Priority,

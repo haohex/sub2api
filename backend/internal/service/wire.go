@@ -284,6 +284,21 @@ func ProvideAccountTestService(
 	return service
 }
 
+// ProvideCodexTurnStateProbeService creates and starts the account-level
+// Codex turn-state candidate refresher. It is intentionally separate from the
+// interactive account-test service because probes stop at response headers and
+// must never stream a full model answer.
+func ProvideCodexTurnStateProbeService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *OpenAITokenProvider,
+	httpUpstream HTTPUpstream,
+) *CodexTurnStateProbeService {
+	svc := NewCodexTurnStateProbeService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
+	svc.Start()
+	return svc
+}
+
 func ProvideGrokQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -890,6 +905,7 @@ var ProviderSet = wire.NewSet(
 	ProvideRateLimitService,
 	ProvideAccountUsageService,
 	ProvideAccountTestService,
+	ProvideCodexTurnStateProbeService,
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideSettingService,
