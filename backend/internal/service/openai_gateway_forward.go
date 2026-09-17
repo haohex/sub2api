@@ -1506,6 +1506,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	s.applyOpenAICodexTurnStateOverrideHeader(c, account, req.Header)
 	if account.UsesOpenAICodexProtocol() {
 		// 桥的判定：/v1/messages 入口置位的上下文键，或请求体里的桥标记（两层 sub2api 串联时前一层的桥
 		// 请求直连到这里的 /v1/responses）。双开账号不按请求体嗅探：真客户端每条 /responses 都无条件带
@@ -1592,6 +1593,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// intentionally runs after client echo guards and header overrides so the
 	// configured account/model candidate cannot be replaced by an inbound value.
 	applyConfiguredCodexTurnStateToRequest(account, req, gjson.GetBytes(body, "model").String(), token)
+	noteCodexTurnStateProbeUsage(c, req)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
 	// 侧信道：按真客户端节奏补一条只读 GET settings/user（openai_codex_side_calls.go）。

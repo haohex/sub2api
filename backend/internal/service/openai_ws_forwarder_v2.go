@@ -69,6 +69,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if c != nil && c.Request != nil {
 		// 客户端回带的 turn-state：已知由其他账号铸造（failover 换号）则剥离。
 		turnState = s.guardOpenAICodexTurnStateValue(c, account, c.GetHeader(openAIWSTurnStateHeader))
+		turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	// 帧内默认只承载客户端自己持有的值；发送边界若命中账号级候选，则由候选覆盖。
@@ -137,6 +138,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 			turnState = s.guardOpenAICodexTurnStateValue(c, account, savedTurnState)
+			turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
 		}
 	}
 	preferredConnID := ""

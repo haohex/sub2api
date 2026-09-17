@@ -534,11 +534,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	// 客户端回带的 turn-state：已知由其他账号铸造（failover 换号）则剥离。
 	turnState := s.guardOpenAICodexTurnStateValue(c, account, c.GetHeader(openAIWSTurnStateHeader))
+	turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
 	// clientTurnState 默认保存"客户端自己持有的值"，双开的帧内沿用该语义；命中账号级候选时
 	// 发送边界会覆盖成当前账号/模型的 state。真客户端的 turn_state
 	// 是每轮新建的 OnceLock（core/src/client.rs:292、:522-526），只可能来自本轮上游的
 	// response.metadata 事件；网关握手铸出的值、会话存储里的旧值客户端从未收到过，复用连接
 	// 开新一轮时真客户端首帧确实不带（core/tests/suite/turn_state.rs:140、:152 断言 null）。
+	// 例外：账号配了 turn-state 覆写时，上面 applyOpenAICodexTurnStateOverrideWSManualOnly 已把
+	// turnState 换成覆写值，这里刻意让它一并进帧——双开握手头被删，帧内是唯一通道。
 	clientTurnState := turnState
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
@@ -564,6 +567,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if turnState == "" && stateStore != nil && sessionHash != "" {
 			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 				turnState = s.guardOpenAICodexTurnStateValue(c, account, savedTurnState)
+				turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
 			}
 		}
 

@@ -69,6 +69,7 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"session_window_utilization":               {},
 	service.CodexTurnStateProbeCacheExtraKey:   {},
 	service.CodexTurnStateProbeFailureExtraKey: {},
+	"openai_turn_state_pool":                   {},
 }
 
 const postgresParameterBatchSize = 50000

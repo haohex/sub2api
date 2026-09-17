@@ -17,6 +17,7 @@ import (
 const codexTurnStateObservationLimit = 1 << 20
 
 type codexTurnStateRequestKey struct{}
+type codexTurnStateUsageContextKey struct{}
 
 type codexTurnStateRequest struct {
 	accountID int64
@@ -314,6 +315,9 @@ func (s *OpenAIGatewayService) prepareCodexTurnStateWSFrame(ctx context.Context,
 			candidateAccount = &copyAccount
 		}
 	}
+	if codexTurnStateProbeEnabled(account) {
+		clearOpenAITurnStateInjected(c)
+	}
 	payload = applyCodexWSFrameWireProfile(c, candidateAccount, payload, turnState, token)
 	model := gjson.GetBytes(payload, "model").String()
 	state := gjson.GetBytes(payload, "client_metadata."+openAICodexTurnStateHeader).String()
@@ -321,6 +325,9 @@ func (s *OpenAIGatewayService) prepareCodexTurnStateWSFrame(ctx context.Context,
 		state = headers.Get(openAICodexTurnStateHeader)
 	}
 	candidate := codexTurnStateCandidateSent(candidateAccount, model, state)
+	if candidate != nil {
+		markOpenAITurnStateInjected(c, candidate.entry.State, turnStateSourceProbe)
+	}
 	return payload, newCodexTurnStateObservation(ctx, s.accountRepo, candidate, s.wakeCodexTurnStateProbe)
 }
 
@@ -351,4 +358,25 @@ func refreshCodexTurnStateHTTPRequest(req *http.Request, repo AccountRepository)
 		req.Header.Set(openAICodexTurnStateHeader, next.entry.State)
 	}
 	*req = *req.WithContext(context.WithValue(req.Context(), codexTurnStateRequestKey{}, next))
+	if c, ok := req.Context().Value(codexTurnStateUsageContextKey{}).(*gin.Context); ok {
+		clearOpenAITurnStateInjected(c)
+		if next != nil {
+			markOpenAITurnStateInjected(c, next.entry.State, turnStateSourceProbe)
+		}
+	}
+}
+
+// The new main branch records override sources on usage logs. Preserve that
+// observability while keeping the probe independent of the legacy auto pool.
+func noteCodexTurnStateProbeUsage(c *gin.Context, req *http.Request) {
+	if req == nil {
+		return
+	}
+	candidate, _ := req.Context().Value(codexTurnStateRequestKey{}).(*codexTurnStateRequest)
+	if candidate != nil {
+		markOpenAITurnStateInjected(c, candidate.entry.State, turnStateSourceProbe)
+		if c != nil {
+			*req = *req.WithContext(context.WithValue(req.Context(), codexTurnStateUsageContextKey{}, c))
+		}
+	}
 }
