@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"sync"
 )
 
 // CPR admin API 额度适配器。
@@ -55,6 +56,13 @@ const (
 	CPRAccountStatusError          = "error"
 )
 
+// CPRPlanTypeExtraKey 存 CPR admin 返回的订阅档位（Plus/Pro/Team/Free…）。
+// 放 extra 而不是 credentials：UpdateExtra 是 JSONB key 级合并，不会与管理端
+// 改凭据的整体写入互相覆盖。导出是因为调度快照的 extra 白名单
+// （repository/scheduler_cache.go filterSchedulerExtra）要引用它——不进白名单，
+// Redis 命中路径上的投影账号就看不到档位，订阅优先调度对 cpr 形同虚设。
+const CPRPlanTypeExtraKey = "cpr_plan_type"
+
 // CPRAccountState 是一次 admin 查询的归一化结果。
 type CPRAccountState struct {
 	AccountID        string
@@ -66,7 +74,9 @@ type CPRAccountState struct {
 	LimitReached     bool
 	RateLimitedUntil *time.Time
 	RateLimit        *OpenAIRateLimit
-	FetchedAt        time.Time
+	// LimitIDs 是 CPR 返回的全部额度窗口的 limitId（含空串），只用于诊断日志。
+	LimitIDs  []string
+	FetchedAt time.Time
 }
 
 // Schedulable 报告 CPR 是否会把请求路由给这个账号。CPR 的 scheduling_blocker
@@ -212,8 +222,31 @@ func buildCPRAccountState(view *cprAccountView, now time.Time) *CPRAccountState 
 	if until := parseCPRDisplayTime(view.Quota.RateLimitedUntil); until != nil {
 		state.RateLimitedUntil = until
 	}
+	for _, window := range view.Quota.Windows {
+		state.LimitIDs = append(state.LimitIDs, window.LimitID)
+	}
 	state.RateLimit = buildCPRRateLimit(view.Quota, now)
 	return state
+}
+
+// cprQuotaNoUsableWindowWarnedAt 按账号节流下面的 warn：这种状态下 extra 一个字节
+// 都不写、时效判定恒认为快照缺失，每次 /usage 刷新都会再查再打，不节流就是
+// 每账号每次刷新一条且永不收敛。
+var cprQuotaNoUsableWindowWarnedAt sync.Map // accountID(int64) -> time.Time
+
+// warnCPRQuotaNoUsableWindow：CPR 返回了额度窗口，却没有一条能落成主线 5h/7d
+// ——要么 limitId 不是 codex/空（CPR 换了主线标识），要么主线窗口缺
+// used_percent/window_seconds 被 convertCPRWindow 丢弃。两种情况下 codex_5h/7d
+// 都会停在旧值，进度条与 auto-pause 一直看旧数，不打日志就是静默卡死。
+func warnCPRQuotaNoUsableWindow(accountID int64, limitIDs []string) {
+	now := time.Now()
+	if last, ok := cprQuotaNoUsableWindowWarnedAt.Load(accountID); ok {
+		if t, ok := last.(time.Time); ok && now.Sub(t) < time.Hour {
+			return
+		}
+	}
+	cprQuotaNoUsableWindowWarnedAt.Store(accountID, now)
+	slog.Warn("cpr_quota_no_usable_main_window", "account_id", accountID, "limit_ids", limitIDs)
 }
 
 // buildCPRRateLimit 把 windows[] 折成 primary/secondary 两个窗口。
@@ -224,6 +257,9 @@ func buildCPRRateLimit(quota cprAccountQuota, now time.Time) *OpenAIRateLimit {
 	limit := &OpenAIRateLimit{LimitReached: quota.LimitReached}
 	matched := false
 	for _, window := range quota.Windows {
+		if !isCPRMainCodexLimitLine(window.LimitID) {
+			continue
+		}
 		converted := convertCPRWindow(window, now)
 		if converted == nil {
 			continue
@@ -242,6 +278,21 @@ func buildCPRRateLimit(quota cprAccountQuota, now time.Time) *OpenAIRateLimit {
 	}
 	limit.Allowed = !quota.LimitReached
 	return limit
+}
+
+// isCPRMainCodexLimitLine 判定一个额度窗口是否属于主 Codex 限额线。
+//
+// CPR 会把官方 rate_limits_by_limit_id 的每个桶都列出来，除主线外还有
+// codex_bengalfox（GPT-5.3-Codex-Spark）这类按模型单算的限额族。它们各自
+// 独立起算、重置时间都不同，混进来会让 role 槽位被后写的覆盖——pro1 实测
+// 就是主线 7d 的 5% 被 Spark 的窗口顶成 0%/14%，与官方页面对不上。
+//
+// "codex" 是 CPR 的主线标识（credential/quota/document.rs 的
+// DEFAULT_CODEX_LIMIT_ID，snapshot.rs 的排序里固定排 0）。留空按主线处理：
+// CPR 老版本的单桶视图不带 limitId，那时只有一条线。
+func isCPRMainCodexLimitLine(limitID string) bool {
+	trimmed := strings.TrimSpace(limitID)
+	return trimmed == "" || strings.EqualFold(trimmed, "codex")
 }
 
 func convertCPRWindow(window cprQuotaWindow, now time.Time) *OpenAIRateLimitWindow {
@@ -279,7 +330,10 @@ func (s *AccountUsageService) refreshCPRCodexSnapshot(ctx context.Context, accou
 		slog.Warn("cpr_account_state_query_failed", "account_id", account.ID, "error", err)
 		return
 	}
-	updates := buildCPRCodexExtraUpdates(state)
+	if state != nil && state.RateLimit == nil && len(state.LimitIDs) > 0 {
+		warnCPRQuotaNoUsableWindow(account.ID, state.LimitIDs)
+	}
+	updates := buildCPRCodexExtraUpdates(account, state)
 	if len(updates) == 0 {
 		return
 	}
@@ -305,11 +359,33 @@ func (s *AccountUsageService) refreshCPRCodexSnapshot(ctx context.Context, accou
 // 行为与 OAuth 那条路一致（buildCodexPrimaryWindowExtraUpdates 返回 nil 时同样什么
 // 都不写），代价是时效判定继续认为快照缺失、下次还会再拉一次——对本机 admin 调用
 // 可以接受。CPR 账号的状态与错误原因在 CPR 自己后台就能看到，不在这里重复存。
-func buildCPRCodexExtraUpdates(state *CPRAccountState) map[string]any {
+func buildCPRCodexExtraUpdates(account *Account, state *CPRAccountState) map[string]any {
 	if state == nil {
 		return nil
 	}
-	return buildCodexWindowExtraUpdates(state.RateLimit, state.FetchedAt)
+	updates := buildCodexWindowExtraUpdates(state.RateLimit, state.FetchedAt)
+	// 订阅档位：cpr 凭据里没有 plan_type（那是 OAuth 登录态的产物），只能从 CPR
+	// admin 的账号详情拿。开了「订阅优先」的分组靠 IsOpenAIChatGPTSubscription()
+	// 分梯队，没有它 cpr 永远被降到第二梯队，与同一份 ChatGPT 订阅的 oauth 账号
+	// 权重不对等。
+	//
+	// 两个不写的情形：
+	//   - CPR 没返回档位：mergeAccountExtra 只写不删，写空串会把已知档位抹成未知。
+	//   - 档位没变：cpr_plan_type 不在 schedulerNeutralExtraKeys 里（它确实影响
+	//     调度，必须让快照看见），无条件写会让每一次 /usage 刷新都触发一次
+	//     UpdateExtra + 调度快照重建。
+	plan := strings.TrimSpace(state.PlanType)
+	known := ""
+	if account != nil {
+		known = strings.TrimSpace(account.GetExtraString(CPRPlanTypeExtraKey))
+	}
+	if plan != "" && !strings.EqualFold(plan, known) {
+		if updates == nil {
+			updates = make(map[string]any, 1)
+		}
+		updates[CPRPlanTypeExtraKey] = plan
+	}
+	return updates
 }
 
 // parseCPRDisplayTime 反解 CPR 的 UTC+8 显示时间。解不出返回 nil——
