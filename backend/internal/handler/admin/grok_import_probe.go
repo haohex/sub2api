@@ -211,6 +211,7 @@ func ProvideAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
+	codexTurnStateProbe *service.CodexTurnStateProbeService,
 ) *AccountHandler {
 	handler := NewAccountHandler(
 		adminService,
@@ -228,6 +229,7 @@ func ProvideAccountHandler(
 		rpmCache,
 		tokenCacheInvalidator,
 	)
+	handler.codexTurnStateProbe = codexTurnStateProbe
 	handler.grokImportProber = grokQuotaService
 	handler.cfg = cfg
 	return handler

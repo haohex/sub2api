@@ -50,6 +50,7 @@ const (
 
 // turn-state 覆写来源，落 usage_logs.turn_state_source。
 const (
+	turnStateSourceProbe     = "probe"
 	turnStateSourceManual    = "manual"
 	turnStateSourceAuto      = "auto"
 	turnStateSourceAutoStale = "auto_stale"
@@ -238,7 +239,7 @@ func (s *OpenAIGatewayService) sweepOpenAITurnStateSessions() {
 //
 // 返回空串表示不改写出站头。
 func (s *OpenAIGatewayService) resolveOpenAITurnStateOverride(c *gin.Context, account *Account) (string, string) {
-	if account == nil {
+	if account == nil || codexTurnStateProbeEnabled(account) {
 		return "", ""
 	}
 	if !account.IsOpenAITurnStateAutoEnabled() {
@@ -338,7 +339,7 @@ func OpenAITurnStateUsageSource(c *gin.Context) string {
 //
 // 任何一步都不该阻塞响应，失败只记日志。
 func (s *OpenAIGatewayService) observeOpenAITurnStateMint(c *gin.Context, account *Account, minted string) {
-	if s == nil || account == nil || !account.TargetsChatGPTCodexUpstream() {
+	if s == nil || account == nil || !account.TargetsChatGPTCodexUpstream() || codexTurnStateProbeEnabled(account) {
 		return
 	}
 	minted = strings.TrimSpace(minted)

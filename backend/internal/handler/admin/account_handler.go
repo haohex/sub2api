@@ -48,6 +48,7 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
+	codexTurnStateProbe     *service.CodexTurnStateProbeService
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
@@ -2811,6 +2812,31 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 		return
 	}
 
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// RetryCodexTurnStateProbe clears the per-model failure budget so the
+// background probe service can start a fresh renewal cycle.
+// POST /api/v1/admin/accounts/:id/codex-turn-state-probe/retry
+func (h *AccountHandler) RetryCodexTurnStateProbe(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, map[string]any{
+		service.CodexTurnStateProbeRetryExtraKey: true,
+	}); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.NotFound(c, "Account not found")
+		return
+	}
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 

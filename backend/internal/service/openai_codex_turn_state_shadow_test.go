@@ -208,7 +208,7 @@ func TestCodexTurnStateShadowRowWSIngressOwnerIsParentIdentity(t *testing.T) {
 
 			inbound := codexWSIngressInbound()
 			frame := codexWSTestFrame
-			want := minted // 回落：会话存储里是握手铸出的值
+			want := "" // 新轮次不复用网关握手铸造的旧值；客户端回带值只进帧。
 			if tc.header {
 				want = eventBlob
 				inbound.Set(openAICodexTurnStateHeader, eventBlob)
@@ -227,16 +227,10 @@ func TestCodexTurnStateShadowRowWSIngressOwnerIsParentIdentity(t *testing.T) {
 			headers := dialer.Headers()
 			require.Len(t, headers, 2, "第二轮新拨")
 			require.Len(t, secondCapture.rawWrites, tc.frames)
-			if tc.convergence {
-				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "双开握手不带 turn-state")
-				for i, sent := range secondCapture.rawWrites {
-					require.Equal(t, want, gjson.GetBytes(sent, "client_metadata."+openAICodexTurnStateHeader).String(),
-						"影子行回带母账号身份下的 blob 不得被剥（第 %d 帧）：%s", i+1, sent)
-				}
-				return
+			require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "所有 Codex 出站握手都不带 turn-state")
+			for i, sent := range secondCapture.rawWrites {
+				require.Equal(t, want, gjson.GetBytes(sent, "client_metadata."+openAICodexTurnStateHeader).String(), "客户端回带值只走帧且保持母账号归属，第 %d 帧", i+1)
 			}
-			require.Equal(t, want, headers[1].Get(openAICodexTurnStateHeader),
-				"非双开影子行：握手承载母账号身份下的 blob，不得按影子行自身身份剥掉")
 		})
 	}
 }
@@ -297,13 +291,13 @@ func TestCodexTurnStateShadowRowWSV2OwnerIsParentIdentity(t *testing.T) {
 			require.Len(t, headers, 2)
 			require.Len(t, second.rawWrites, 1)
 			frameState := gjson.GetBytes(second.rawWrites[0], "client_metadata."+openAICodexTurnStateHeader)
-			if tc.convergence {
-				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "双开握手不带 turn-state")
-				require.Equal(t, minted, frameState.String(), "影子行回带：双开帧内承载，不得按影子行自身身份剥掉：%s", second.rawWrites[0])
-				return
+			require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "所有 Codex 出站握手都不带 turn-state")
+			if tc.echo {
+				require.Equal(t, minted, frameState.String(), "客户端回带值移到帧内，归属仍为母账号")
+			} else {
+				require.False(t, frameState.Exists(), "新轮次不补网关缓存的旧握手值")
 			}
-			require.Equal(t, minted, headers[1].Get(openAICodexTurnStateHeader), "非双开影子行：握手承载（回带或会话存储回落），不得按影子行自身身份剥掉")
-			require.False(t, frameState.Exists())
+
 		})
 	}
 }

@@ -134,6 +134,7 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	openAIQuotaFollowReset *service.OpenAIGroupQuotaFollowResetService,
+	codexTurnStateProbe *service.CodexTurnStateProbeService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
@@ -163,6 +164,12 @@ func provideCleanup(
 			{"OpenAIGroupQuotaFollowResetService", func() error {
 				if openAIQuotaFollowReset != nil {
 					openAIQuotaFollowReset.Stop()
+				}
+				return nil
+			}},
+			{"CodexTurnStateProbeService", func() error {
+				if codexTurnStateProbe != nil {
+					codexTurnStateProbe.Stop()
 				}
 				return nil
 			}},

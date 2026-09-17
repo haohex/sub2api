@@ -732,12 +732,12 @@
         </div>
       </div>
 
-      <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域)
+      <!-- OpenAI Codex / Grok OAuth Model Mapping (OAuth/Setup Token 类型没有 apikey 容器，需要独立的模型映射区域)
            cpr 同理：它的凭据容器只有 5 个输入框，此前整个弹窗找不到「模型限制」，
            而后端 GetModelMapping() / IsModelSupported() 只读 credentials.model_mapping，
            与账号类型无关，调度器筛候选集时对 cpr 一视同仁地跑这套逻辑。 -->
       <div
-        v-if="((account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth') || (account.platform === 'openai' && account.type === 'cpr')"
+        v-if="(account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token' || account.type === 'cpr')) || (account.platform === 'grok' && account.type === 'oauth')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -2340,9 +2340,85 @@
         </div>
       </div>
 
-      <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
+      <!-- OpenAI Codex turn-state candidate probe (OAuth / Setup Token) -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="codexTurnStateProbeEligible"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
+        data-testid="codex-turn-state-probe-section"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexTurnStateProbe') }}</label>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexTurnStateProbeDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="codex-turn-state-probe-toggle"
+            @click="codexTurnStateProbeEnabled = !codexTurnStateProbeEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              codexTurnStateProbeEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                codexTurnStateProbeEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+
+        <div v-if="codexTurnStateProbeEnabled" class="space-y-4 rounded-lg bg-slate-50 p-3 dark:bg-dark-700/60">
+          <RouterLink to="/admin/codex-state-pool" class="text-sm text-primary-600 hover:underline dark:text-primary-400">
+            {{ t('admin.accounts.openai.codexTurnStateGlobalSettings') }}
+          </RouterLink>
+
+          <div>
+            <label class="input-label">{{ t('admin.accounts.openai.codexTurnStateProbeModels') }}</label>
+            <p class="input-hint">{{ t('admin.accounts.openai.codexTurnStateProbeModelsAutoHint') }}</p>
+            <div v-if="codexTurnStateProbeRestrictionModels.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+              <span
+                v-for="model in codexTurnStateProbeRestrictionModels"
+                :key="model"
+                class="inline-flex items-center rounded-full bg-primary-100 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+              >
+                {{ model }}
+              </span>
+            </div>
+            <p v-else class="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+              {{ t('admin.accounts.openai.codexTurnStateProbeModelsEmpty') }}
+            </p>
+          </div>
+
+          <div
+            v-if="codexTurnStateProbeFailures.length > 0"
+            class="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-900/20"
+          >
+            <p class="text-xs font-medium text-red-700 dark:text-red-300">
+              {{ t('admin.accounts.openai.codexTurnStateProbeRenewalFailed') }}
+            </p>
+            <p class="mt-1 text-xs text-red-600 dark:text-red-400">
+              {{ t('admin.accounts.openai.codexTurnStateProbeRenewalFailedDesc') }}
+              {{ codexTurnStateProbeFailures.join(', ') }}
+            </p>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm mt-2"
+              :disabled="submitting"
+              @click="retryCodexTurnStateProbe"
+            >
+              {{ t('admin.accounts.openai.codexTurnStateProbeRetry') }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 独立 OpenAI 账号的订阅档位，同时用于 state 长度判定 -->
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && !isSparkShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2362,7 +2438,7 @@
         v-if="accountHasOpenAIExtraSettings"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
-        <div v-if="accountSupportsTurnStateOverride" class="space-y-3">
+        <div v-if="accountSupportsTurnStateOverride && !codexTurnStateProbeEnabled" class="space-y-3">
           <div class="flex items-center justify-between gap-4">
             <div class="min-w-0">
               <label class="input-label mb-0">{{ t('admin.accounts.openai.turnStateAuto') }}</label>
@@ -3139,9 +3215,9 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import type {
-  Account,
-  Proxy,
-  AdminGroup,
+	Account,
+	Proxy,
+	AdminGroup,
   Group,
   CheckMixedChannelResponse,
   OpenAICompactMode,
@@ -3278,6 +3354,12 @@ const accountSupportsTurnStateOverride = computed(() =>
 )
 
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+
+const codexTurnStateProbeEligible = computed(
+  () => props.account?.platform === 'openai' &&
+    (props.account.type === 'oauth' || props.account.type === 'setup-token') &&
+    !isSparkShadow.value
+)
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -3483,6 +3565,29 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
+
+const codexTurnStateProbeRestrictionModels = computed(() => {
+  const models = new Set<string>()
+  const mapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  for (const model of Object.values(mapping || {})) {
+    const normalized = model.trim()
+    if (normalized && !normalized.includes('*')) models.add(normalized)
+  }
+  return [...models].sort()
+})
+
+const codexTurnStateProbeFailures = computed(() => {
+  const raw = props.account?.extra?.codex_turn_state_probe_failures
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(([, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+      const attempts = Number((value as Record<string, unknown>).attempts)
+      return Number.isFinite(attempts) && attempts >= 25
+    })
+    .map(([model]) => model)
+    .sort()
+})
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const DEFAULT_POOL_MODE_RETRY_STATUS_CODES = [401, 403, 429]
@@ -3683,6 +3788,7 @@ const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 // 账号级出站 User-Agent：留空表示沿用全局设置（后端 GetOpenAIUserAgent 的回落顺序）
 const codexUserAgent = ref('')
 const codexFingerprintConvergence = ref(false)
+const codexTurnStateProbeEnabled = ref(false)
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -4168,8 +4274,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'off'
   codexFingerprintConvergence.value = false
-  codexUserAgent.value = ''
-  codexImageToolMode.value = 'inherit'
+	codexUserAgent.value = ''
+	codexTurnStateProbeEnabled.value = false
+	codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -4179,8 +4286,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
     openAILongContextBillingEnabled.value = longContextBillingValue === true
-    // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
-    editPlanType.value = newAccount.type === 'oauth'
+    // 独立账号回填套餐：OAuth 调度与候选 state 长度判定共用。
+    editPlanType.value = (newAccount.type === 'oauth' || newAccount.type === 'setup-token')
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
       : ''
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
@@ -4229,6 +4336,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexFingerprintConvergence.value = extra?.codex_experimental_fingerprint_convergence === true
       codexUserAgent.value = typeof extra?.codex_user_agent === 'string' ? extra.codex_user_agent : ''
     }
+	if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
+	  codexTurnStateProbeEnabled.value = extra?.codex_turn_state_probe_enabled === true
+	}
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
@@ -5121,6 +5231,20 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
     appStore.showError(error.message || t('admin.accounts.failedToUpdate'))
   } finally {
     submitting.value = false
+	}
+}
+
+const retryCodexTurnStateProbe = async () => {
+  if (!props.account?.id || submitting.value) return
+  submitting.value = true
+  try {
+    const updatedAccount = await adminAPI.accounts.retryCodexTurnStateProbe(props.account.id)
+    emit('updated', updatedAccount)
+    appStore.showSuccess(t('admin.accounts.openai.codexTurnStateProbeRetryStarted'))
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.accounts.openai.codexTurnStateProbeRetryFailed'))
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -5455,9 +5579,9 @@ const handleSubmit = async () => {
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if (
-      ((props.account.platform === 'openai' || props.account.platform === 'grok') &&
-        props.account.type === 'oauth') ||
-      (props.account.platform === 'openai' && props.account.type === 'cpr')
+      (props.account.platform === 'openai' &&
+        (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'cpr')) ||
+      (props.account.platform === 'grok' && props.account.type === 'oauth')
     ) {
       const currentCredentials = isSparkShadow.value
         ? {}
@@ -5522,9 +5646,8 @@ const handleSubmit = async () => {
     }
 
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
-    // 仅 OAuth 非影子账号：
-    // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    // 独立 OAuth / Setup Token 账号；影子账号凭据由母账号管理。
+    if (props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'setup-token') && !isSparkShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
@@ -5883,6 +6006,22 @@ const handleSubmit = async () => {
       }
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
+      updatePayload.extra = newExtra
+    }
+
+    if (codexTurnStateProbeEligible.value) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (codexTurnStateProbeEnabled.value) {
+        newExtra.codex_turn_state_probe_enabled = true
+        delete newExtra.codex_turn_state_probe_proxy_id
+        delete newExtra.codex_turn_state_probe_models
+      } else {
+        newExtra.codex_turn_state_probe_enabled = false
+        delete newExtra.codex_turn_state_probe_proxy_id
+        delete newExtra.codex_turn_state_probe_models
+      }
       updatePayload.extra = newExtra
     }
 

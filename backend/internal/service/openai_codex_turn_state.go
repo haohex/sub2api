@@ -155,7 +155,7 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateFromWSEvent(c *gin.Contex
 	if !containsASCIIFold(frame, []byte(openAICodexTurnStateHeader)) {
 		return
 	}
-	if gjson.GetBytes(frame, "type").String() != "response.metadata" {
+	if !codexTurnStateMetadataEvent(gjson.GetBytes(frame, "type").String()) {
 		return
 	}
 	headers := gjson.GetBytes(frame, "headers")
@@ -294,7 +294,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnStateOverrideWSManualOnly(c *
 	// 整个 WS 上下文都不参与自动接管——包括 WS ingress 的 HTTP 桥，它会拿同一个 c
 	// 去走 passthrough 的出站构建（openai_ws_http_bridge.go），不挡住就漏进去了。
 	markOpenAITurnStateAutoSkipped(c)
-	if account == nil || account.IsOpenAITurnStateAutoEnabled() {
+	if account == nil || codexTurnStateProbeEnabled(account) || account.IsOpenAITurnStateAutoEnabled() {
 		return current
 	}
 	if manual := account.OpenAICodexTurnStateOverride(); manual != "" {
@@ -408,7 +408,7 @@ func usageCodexTurnStateOverriddenPtr(account *Account, source string) *bool {
 	return &overridden
 }
 
-// usageCodexTurnStateSourcePtr 记录覆写来源：manual / auto / auto_stale，没注入为 nil。
+// usageCodexTurnStateSourcePtr 记录覆写来源：probe / manual / auto / auto_stale，没注入为 nil。
 func usageCodexTurnStateSourcePtr(account *Account, source string) *string {
 	if account == nil || !account.TargetsChatGPTCodexUpstream() {
 		return nil

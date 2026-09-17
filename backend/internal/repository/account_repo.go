@@ -64,12 +64,12 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_usage_updated_at":     {},
-	"grok_billing_snapshot":      {},
-	"session_window_utilization": {},
-	// turn-state 自动接管的候选池是运行态数据，上游每铸出一条健康 blob 就写一次，
-	// 不参与调度决策——不放进来的话每次响应都要重建一次调度快照。
-	"openai_turn_state_pool": {},
+	"codex_usage_updated_at":                   {},
+	"grok_billing_snapshot":                    {},
+	"session_window_utilization":               {},
+	service.CodexTurnStateProbeCacheExtraKey:   {},
+	service.CodexTurnStateProbeFailureExtraKey: {},
+	"openai_turn_state_pool":                   {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -777,6 +777,12 @@ func lockAndMergeAccountProbeExtra(
 				extra[service.OllamaCloudUsageSnapshotExtraKey] = snapshot
 			}
 		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := preserveCodexTurnStateProbeRuntime(ctx, client, account, extra); err != nil {
+		return nil, err
 	}
 	return extra, nil
 }
@@ -2648,6 +2654,10 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
+	cacheUpdate, hasCacheUpdate := updates[service.CodexTurnStateProbeCacheExtraKey]
+	clearCodexTurnStateCache := hasCacheUpdate && cacheUpdate == nil
+	failureUpdate, hasFailureUpdate := updates[service.CodexTurnStateProbeFailureExtraKey]
+	clearCodexTurnStateFailures := hasFailureUpdate && failureUpdate == nil
 	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -2668,6 +2678,12 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
+	}
+	if clearCodexTurnStateCache {
+		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeCacheExtraKey + "'"
+	}
+	if clearCodexTurnStateFailures {
+		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeFailureExtraKey + "'"
 	}
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)

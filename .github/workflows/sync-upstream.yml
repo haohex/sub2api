@@ -144,9 +144,6 @@ jobs:
           path: ${{ runner.temp }}/upstream.bundle
           retention-days: 1
 
-      - name: Resync default branch onto upstream
-        # 前面的 drift 告警红了也要跑：main 只是 cron 宿主，同步它不该被告警牵连
-        if: ${{ !cancelled() }}
   propose:
     needs: sync
     if: needs.sync.outputs.changed == 'true'
