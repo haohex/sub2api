@@ -1772,6 +1772,7 @@ export interface UsageLog {
 export interface UsageLogAccountSummary {
   id: number
   name: string
+  plan_type?: string | null
 }
 
 export interface AdminUsageLog extends UsageLog {
@@ -1782,8 +1783,10 @@ export interface AdminUsageLog extends UsageLog {
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
   // Codex 回合状态：上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文）
+  turn_state_sent?: string | null
   turn_state_sent_length?: number | null
   turn_state_returned_length?: number | null
+  turn_state_expected_length?: number | null
   turn_state?: string | null
   // 本次出站带的是否为账号级 turn-state 覆写值
   turn_state_overridden?: boolean | null

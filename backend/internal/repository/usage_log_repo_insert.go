@@ -91,6 +91,8 @@ var usageLogInsertArgTypes = [...]string{
 	"timestamptz", // created_at
 	"integer",     // turn_state_sent_length
 	"integer",     // turn_state_returned_length
+	"text",        // turn_state_sent
+	"integer",     // turn_state_expected_length
 }
 
 const (
@@ -294,14 +296,14 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+				created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -757,12 +759,12 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+				created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		) AS (VALUES `)
 
-	// Each batch row prepends the synthetic input_index before the 67
+	// Each batch row prepends the synthetic input_index before the 69
 	// usage-log column values.
-	args := make([]any, 0, len(keys)*66)
+	args := make([]any, 0, len(keys)*70)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -855,7 +857,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				turn_state,
 				turn_state_overridden,
 				turn_state_source,
-				created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 			)
 			SELECT
 				user_id,
@@ -922,7 +924,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				turn_state,
 				turn_state_overridden,
 				turn_state_source,
-				created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING request_id, api_key_id, id, created_at
@@ -1029,10 +1031,10 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*67)
+	args := make([]any, 0, len(preparedList)*69)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1122,7 +1124,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		)
 		SELECT
 			user_id,
@@ -1189,7 +1191,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`)
@@ -1264,14 +1266,14 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			turn_state,
 			turn_state_overridden,
 			turn_state_source,
-			created_at, turn_state_sent_length, turn_state_returned_length
+			created_at, turn_state_sent_length, turn_state_returned_length, turn_state_sent, turn_state_expected_length
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1403,6 +1405,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			turnStateSource,     // turn_state_source
 			createdAt,
 			nullInt(log.TurnStateSentLength), nullInt(log.TurnStateReturnedLength),
+			nullString(log.TurnStateSent), nullInt(log.TurnStateExpectedLength),
 		},
 	}
 }

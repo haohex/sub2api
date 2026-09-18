@@ -33,13 +33,13 @@
         {{ t('admin.accounts.statePool.empty') }}
       </div>
       <div v-else class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <article v-for="row in visibleRows" :key="row.account_id" class="min-w-0 rounded-xl border border-l-4 bg-white p-5 shadow-sm dark:bg-dark-800" :class="isValid(row) ? 'border-gray-200 border-l-emerald-500 dark:border-dark-600 dark:border-l-emerald-500' : 'border-gray-200 border-l-amber-500 dark:border-dark-600 dark:border-l-amber-500'">
+        <article v-for="row in visibleRows" :key="row.account_id" class="min-w-0 rounded-xl border border-l-4 bg-white p-5 shadow-sm dark:bg-dark-800" :class="stateTone(row) === 'normal' ? 'border-gray-200 border-l-emerald-500 dark:border-dark-600 dark:border-l-emerald-500' : stateTone(row) === 'abnormal' ? 'border-gray-200 border-l-red-500 dark:border-dark-600 dark:border-l-red-500' : 'border-gray-200 border-l-gray-400 dark:border-dark-600 dark:border-l-gray-500'">
           <div class="flex flex-wrap items-start justify-between gap-2">
             <h2 class="break-all text-base font-semibold">#{{ row.account_id }} · {{ row.account_name }}</h2>
             <select :disabled="importing" :value="row.model" class="input w-full font-mono" :aria-label="t('admin.accounts.statePool.model')" @change="selectModel(row.account_id, ($event.target as HTMLSelectElement).value)">
               <option v-for="model in accountModels(row.account_id)" :key="model" :value="model">{{ model }}</option>
             </select>
-            <span class="rounded px-2 py-1 text-xs font-medium" :class="isValid(row) ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'">{{ stateLabel(row) }}</span>
+            <span class="rounded px-2 py-1 text-xs font-medium" :class="stateTone(row) === 'normal' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : stateTone(row) === 'abnormal' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'">{{ stateLabel(row) }}</span>
           </div>
 
           <p class="mt-1 text-xs text-gray-500">{{ row.plan || t('admin.accounts.statePool.unknownPlan') }} · {{ t('admin.accounts.statePool.expectedLength', { length: row.expected_length || '—' }) }}</p>
@@ -49,14 +49,14 @@
               <span class="text-gray-500">{{ t('admin.accounts.statePool.remaining') }}</span>
               <span class="font-mono font-semibold tabular-nums">{{ remainingLabel(row) }}</span>
             </div>
-            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600"><div class="h-full rounded-full bg-emerald-500 transition-all" :style="{ width: `${remainingPercent(row)}%` }" /></div>
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600"><div class="h-full rounded-full transition-all" :class="stateTone(row) === 'normal' ? 'bg-emerald-500' : stateTone(row) === 'abnormal' ? 'bg-red-500' : 'bg-gray-400'" :style="{ width: `${remainingPercent(row)}%` }" /></div>
             <p class="mt-2 text-xs text-gray-500">{{ t('admin.accounts.statePool.issuedAt') }} {{ formatTime(row.issued_at) }}</p>
             <p class="mt-1 text-xs text-gray-500">{{ t('admin.accounts.statePool.obtainedAt') }} {{ formatTime(row.obtained_at) }}</p>
             <p class="mt-2 text-xs text-gray-500">{{ t('admin.accounts.statePool.expiresAt') }} {{ formatTime(row.expires_at) }}</p>
           </div>
 
           <div class="mt-4 space-y-2 rounded-lg border border-gray-200 p-3 text-xs dark:border-dark-600">
-            <div class="flex justify-between gap-2"><span class="font-mono">X-Codex-Turn-State</span><span>{{ row.state_length || '—' }}</span></div>
+            <div class="flex justify-between gap-2"><span class="font-mono">X-Codex-Turn-State</span><span :class="stateTone(row) === 'normal' ? 'text-emerald-600 dark:text-emerald-300' : stateTone(row) === 'abnormal' ? 'text-red-600 dark:text-red-300' : 'text-gray-500'">{{ row.state_length || '—' }}</span></div>
             <p class="font-mono tracking-widest text-gray-400">•••• •••• •••• ••••</p>
             <p class="text-gray-500">{{ t('admin.accounts.statePool.rawHint') }}</p>
           </div>
@@ -68,9 +68,9 @@
           </div>
           <div class="mt-4 flex flex-wrap justify-between gap-2">
             <button class="btn btn-secondary btn-sm" :disabled="!isValid(row) || copying === rowKey(row)" @click="copyState(row)">{{ t('admin.accounts.statePool.copy') }}</button>
-            <button class="btn btn-primary btn-sm" :disabled="!row.can_refresh || refreshing.has(rowKey(row))" @click="queueRefresh(row)">{{ t('admin.accounts.statePool.refresh') }}</button>
+            <button class="btn btn-primary btn-sm" :disabled="refreshing.has(rowKey(row))" @click="queueRefresh(row)">{{ t('admin.accounts.statePool.refresh') }}</button>
           </div>
-          <button class="btn btn-secondary btn-sm mt-3" :disabled="importing || !row.can_refresh" @click="openImport(row)">{{ t('admin.accounts.statePool.paste') }}</button>
+          <button class="btn btn-secondary btn-sm mt-3" :disabled="importing" @click="openImport(row)">{{ t('admin.accounts.statePool.paste') }}</button>
           <div v-if="importKey === rowKey(row)" class="mt-3 space-y-2">
             <textarea v-model="pastedState" :disabled="importing" class="input min-h-24 font-mono text-xs" autocomplete="off" spellcheck="false" :aria-label="t('admin.accounts.statePool.paste')" maxlength="4096" />
             <p class="text-xs">{{ t('admin.accounts.statePool.inputLength', { length: pastedState.trim().length }) }}</p>
@@ -105,7 +105,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
 import { getAll as getProxies } from '@/api/admin/proxies'
-import { getStatePool, saveStatePoolProxy, refreshState, getStateValue, getStateEvents, importState, type StateEvent, type StatePoolRow, type StatePoolResponse } from '@/api/admin/codexStatePool'
+import { getStatePool, saveStatePoolProxy, refreshState, getStateValue, getStateEvents, importState, getImportJob, type StateEvent, type StatePoolRow, type StatePoolResponse } from '@/api/admin/codexStatePool'
 import type { Proxy } from '@/types'
 
 const { t } = useI18n()
@@ -123,6 +123,7 @@ const importKey = ref('')
 const pastedState = ref('')
 const importing = ref(false)
 const importError = ref('')
+const importStatus = ref('')
 const search = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -158,18 +159,41 @@ async function loadEvents(row: StatePoolRow, more = false) {
   } catch { logErrors.value[key] = true }
 }
 function toggleLogs(row: StatePoolRow) { if (logsOpen.value.has(row.account_id)) logsOpen.value.delete(row.account_id); else { logsOpen.value.add(row.account_id); void loadEvents(row) } }
-function closeImport() { importKey.value = ''; pastedState.value = ''; importError.value = '' }
+function closeImport() { importKey.value = ''; pastedState.value = ''; importError.value = ''; importStatus.value = '' }
 function openImport(row: StatePoolRow) { closeImport(); importKey.value = rowKey(row) }
 async function submitImport(row: StatePoolRow) {
   importing.value = true; importError.value = ''
-  try { await importState(row, pastedState.value.trim()); closeImport(); app.showSuccess(t('admin.accounts.statePool.imported')); await loadPool() }
+  try {
+    const job = await importState(row, pastedState.value.trim())
+    closeImport(); importStatus.value = job.status
+    app.showSuccess(t('admin.accounts.statePool.importQueued'))
+    void watchImportJob(row, job.id)
+    await loadPool()
+  }
   catch (error: any) { const reason = error?.message || error?.detail || error?.response?.data?.message || error?.response?.data?.detail || t('admin.accounts.statePool.refreshFailed'); importError.value = reasonLabel(reason) }
   finally { importing.value = false; if (logsOpen.value.has(row.account_id)) void loadEvents(row) }
+}
+async function watchImportJob(row: StatePoolRow, jobId: string) {
+  for (let attempt = 0; attempt < 120 && !disposed; attempt += 1) {
+    await new Promise(resolve => window.setTimeout(resolve, 500))
+    try {
+      const job = await getImportJob(row, jobId)
+      if (job.status === 'succeeded') { app.showSuccess(t('admin.accounts.statePool.imported')); await loadPool(); return }
+      if (job.status === 'failed') { app.showError(reasonLabel(job.reason || 'probe_failed')); await loadPool(); return }
+    } catch { return }
+  }
 }
 const validCount = computed(() => visibleRows.value.filter(isValid).length)
 const rowKey = (row: StatePoolRow) => `${row.account_id}:${row.model}`
 const remaining = (row: StatePoolRow) => row.expires_at ? Math.max(0, Date.parse(row.expires_at) - now.value) : 0
 const isValid = (row: StatePoolRow) => row.state_status === 'valid' && remaining(row) > 0
+function stateTone(row: StatePoolRow): 'normal' | 'abnormal' | 'unknown' {
+  if (row.expected_length > 0 && row.state_length > 0) {
+    return row.state_length === row.expected_length && row.state_status === 'valid' ? 'normal' : 'abnormal'
+  }
+  if (row.state_status === 'invalid' || row.state_status === 'expired') return 'abnormal'
+  return 'unknown'
+}
 function remainingPercent(row: StatePoolRow) {
   if (!isValid(row) || !row.obtained_at || !row.expires_at) return 0
   const duration = Date.parse(row.expires_at) - Date.parse(row.obtained_at)
@@ -183,7 +207,8 @@ function remainingLabel(row: StatePoolRow) {
 }
 function formatTime(value?: string) { return value ? new Date(value).toLocaleString() : '—' }
 function stateLabel(row: StatePoolRow) {
-  if (isValid(row)) return t('admin.accounts.statePool.valid', { length: row.state_length })
+  if (stateTone(row) === 'normal') return t('admin.accounts.statePool.valid', { length: row.state_length })
+  if (stateTone(row) === 'abnormal') return t('admin.accounts.statePool.invalid')
   if (row.state_status === 'valid' || row.state_status === 'expired') return t('admin.accounts.statePool.expired')
   if (row.state_status === 'unknown_plan') return t('admin.accounts.statePool.unknownPlan')
   if (row.state_status === 'disabled') return t('admin.accounts.statePool.disabled')

@@ -162,15 +162,28 @@ func (s *CodexTurnStateProbeService) QueueRefresh(ctx context.Context, id int64,
 		return infraerrors.BadRequest("PROBE_PROXY_UNAVAILABLE", "configure an active global probe proxy first")
 	}
 	s.runtimeMu.Lock()
-	key := codexTurnStatePoolKey{id, model}
-	state := s.runtime[key]
-	if state.Status != "running" && state.Status != "queued" {
+	runtimeKey := codexTurnStatePoolKey{id, model}
+	runtimeState := s.runtime[runtimeKey]
+	if runtimeState.Status != "running" && runtimeState.Status != "queued" {
 		if s.runtime == nil {
 			s.runtime = make(map[codexTurnStatePoolKey]codexTurnStateProbeRuntime)
 		}
-		s.runtime[key] = codexTurnStateProbeRuntime{Status: "queued", UpdatedAt: time.Now().UTC()}
+		s.runtime[runtimeKey] = codexTurnStateProbeRuntime{Status: "queued", UpdatedAt: time.Now().UTC()}
 	}
 	s.runtimeMu.Unlock()
+	s.scheduleMu.Lock()
+	if s.schedules == nil {
+		s.schedules = make(map[codexTurnStatePoolKey]*codexStateSchedule)
+	}
+	scheduleKey := codexTurnStatePoolKey{id, model}
+	scheduleState := s.schedules[scheduleKey]
+	if scheduleState == nil {
+		scheduleState = &codexStateSchedule{Next: time.Now().UTC()}
+		s.schedules[scheduleKey] = scheduleState
+	}
+	scheduleState.ManualPending = true
+	scheduleState.Next = time.Now().UTC()
+	s.scheduleMu.Unlock()
 	s.Wake()
 	return nil
 }
@@ -256,7 +269,7 @@ func (s *CodexTurnStateProbeService) Pool(ctx context.Context) (*CodexTurnStateP
 			if busy {
 				row.ProbeStatus = "running"
 			}
-			row.CanRefresh = row.Enabled && row.ExpectedLength > 0 && account.Status == StatusActive && config.Available && !busy
+			row.CanRefresh = row.Enabled && row.ExpectedLength > 0 && account.Status == StatusActive && config.Available
 			if !config.Available || account.Status != StatusActive || !row.Enabled || row.ExpectedLength == 0 {
 				row.ProbeStatus = "blocked"
 				row.Mode = "paused"

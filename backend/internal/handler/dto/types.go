@@ -696,8 +696,10 @@ type AdminUsageLog struct {
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
 	// TurnState 是上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文），仅管理端可见。
 	// 长度在前端直接由该字符串算，不单独存列。
+	TurnStateSent           *string `json:"turn_state_sent,omitempty"`
 	TurnStateSentLength     *int    `json:"turn_state_sent_length"`
 	TurnStateReturnedLength *int    `json:"turn_state_returned_length"`
+	TurnStateExpectedLength *int    `json:"turn_state_expected_length"`
 	TurnState               *string `json:"turn_state,omitempty"`
 	// TurnStateOverridden 表示本次出站带的是账号级 turn-state 覆写值。
 	TurnStateOverridden *bool `json:"turn_state_overridden,omitempty"`
@@ -749,8 +751,9 @@ type UsageCleanupTask struct {
 // AccountSummary is a minimal account info for usage log display.
 // It intentionally excludes sensitive fields like Credentials, Proxy, etc.
 type AccountSummary struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	PlanType string `json:"plan_type,omitempty"`
 }
 
 type Setting struct {

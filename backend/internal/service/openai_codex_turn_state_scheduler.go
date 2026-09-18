@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,12 +11,134 @@ import (
 	"time"
 )
 
+type CodexStateImportJob struct {
+	ID        string    `json:"id"`
+	AccountID int64     `json:"account_id"`
+	Model     string    `json:"model"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	stateHash string
+}
+
+func (s *CodexTurnStateProbeService) QueueImportState(ctx context.Context, id int64, model, state string) (*CodexStateImportJob, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	model = codexTurnStateModelKey(account, model)
+	if !codexTurnStateProbeEnabled(account) || account.Status != StatusActive || CodexTurnStateHealthyLength(account) == 0 || !containsString(CodexTurnStateProbeModels(account), model) {
+		return nil, errors.New("account_not_eligible")
+	}
+	state = strings.TrimSpace(state)
+	digest := sha256.Sum256([]byte(state))
+	stateHash := hex.EncodeToString(digest[:])
+	now := time.Now().UTC()
+	s.importMu.Lock()
+	if s.importJobs == nil {
+		s.importJobs = make(map[string]*CodexStateImportJob)
+	}
+	if s.importPending == nil {
+		s.importPending = make(map[int64]bool)
+	}
+	for _, job := range s.importJobs {
+		if job.AccountID == id && job.Model == model && job.Status == "running" {
+			if job.stateHash == stateHash {
+				copy := *job
+				s.importMu.Unlock()
+				return &copy, nil
+			}
+			// A different value is queued behind the current validation. The
+			// account remains single-flight, so the new job will wait for it.
+			continue
+		}
+		if job.AccountID == id && job.Model == model && job.Status == "queued" {
+			if job.stateHash == stateHash {
+				copy := *job
+				s.importMu.Unlock()
+				return &copy, nil
+			}
+			job.Status, job.Reason, job.UpdatedAt = "failed", "superseded", now
+		}
+	}
+	job := &CodexStateImportJob{ID: fmt.Sprintf("import-%d-%d", id, now.UnixNano()), AccountID: id, Model: model, Status: "queued", CreatedAt: now, UpdatedAt: now}
+	job.stateHash = stateHash
+	s.importJobs[job.ID] = job
+	s.importPending[id] = true
+	copy := *job
+	s.importMu.Unlock()
+	s.Wake()
+	go s.runImportJob(job.ID, id, model, state)
+	return &copy, nil
+}
+
+func (s *CodexTurnStateProbeService) runImportJob(jobID string, id int64, model, state string) {
+	for {
+		s.importMu.Lock()
+		job := s.importJobs[jobID]
+		if job == nil || job.Status != "queued" {
+			s.importMu.Unlock()
+			return
+		}
+		if job != nil {
+			job.Status = "running"
+			job.UpdatedAt = time.Now().UTC()
+		}
+		s.importMu.Unlock()
+		_, err := s.ImportState(s.ctx, id, model, state)
+		if err != nil && err.Error() == "account_busy" {
+			select {
+			case <-time.After(250 * time.Millisecond):
+				continue
+			case <-s.ctx.Done():
+				err = errors.New("import_cancelled")
+			}
+		}
+		s.importMu.Lock()
+		if job := s.importJobs[jobID]; job != nil {
+			job.UpdatedAt = time.Now().UTC()
+			if err == nil {
+				job.Status, job.Reason = "succeeded", "replaced"
+			} else {
+				job.Status, job.Reason = "failed", err.Error()
+			}
+		}
+		pending := false
+		for _, pendingJob := range s.importJobs {
+			if pendingJob.AccountID == id && (pendingJob.Status == "queued" || pendingJob.Status == "running") {
+				pending = true
+				break
+			}
+		}
+		if !pending {
+			delete(s.importPending, id)
+		}
+		s.importMu.Unlock()
+		s.Wake()
+		return
+	}
+}
+
+func (s *CodexTurnStateProbeService) ImportJob(id string) (*CodexStateImportJob, bool) {
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	job, ok := s.importJobs[id]
+	if !ok {
+		return nil, false
+	}
+	copy := *job
+	return &copy, true
+}
+
 type codexStateSchedule struct {
-	Next      time.Time
-	Remaining int
-	Attempt   int
-	Manual    bool
-	Mode      string
+	Next          time.Time
+	Remaining     int
+	Attempt       int
+	Manual        bool
+	ManualPending bool
+	NoValid       bool
+	Mode          string
 }
 
 func codexStateMode(entry codexTurnStateCacheEntry, expected int, token string, now time.Time) string {
@@ -95,11 +219,20 @@ func (s *CodexTurnStateProbeService) dispatchStateProbes(ctx context.Context) {
 				s.schedules[key] = state
 			}
 			previous := state.Mode
+			state.NoValid = !validCodexTurnStateCacheEntry(entry, CodexTurnStateHealthyLength(&account), account.GetOpenAIAccessToken(), now)
 			if queued {
 				state.Manual = true
 				state.Remaining = 25
 				state.Attempt = 0
 				state.Next = now
+			}
+			if state.ManualPending {
+				state.ManualPending = false
+				state.Manual = true
+				state.Remaining = 25
+				state.Attempt = 0
+				state.Next = now
+				mode = "manual"
 			}
 			if mode == "idle" && state.Manual {
 				mode = "manual"
@@ -117,7 +250,10 @@ func (s *CodexTurnStateProbeService) dispatchStateProbes(ctx context.Context) {
 			if mode == "idle" {
 				state.Next = codexStateEffectiveExpiry(entry, now).Add(-30 * time.Minute)
 			}
-			if mode != "idle" && mode != "paused" && !state.Next.After(now) && !s.active[account.ID] {
+			s.importMu.Lock()
+			importPending := s.importPending[account.ID]
+			s.importMu.Unlock()
+			if mode != "idle" && mode != "paused" && !importPending && !state.Next.After(now) && !s.active[account.ID] {
 				tasks = append(tasks, task{account, model, state.Next})
 			}
 			s.scheduleMu.Unlock()
@@ -334,7 +470,7 @@ func advanceCodexStateSchedule(state *codexStateSchedule, replaced bool, now tim
 		}
 		return
 	}
-	if state.Mode != "continuous" {
+	if state.Mode != "continuous" || state.NoValid {
 		state.Remaining--
 		if state.Remaining <= 0 {
 			state.Next = now.Add(5 * time.Minute)

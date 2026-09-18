@@ -241,5 +241,5 @@ func TestCodexTurnStateHTTPDoesNotAttributeUnmanagedHeader(t *testing.T) {
 	req.Header.Set(openAICodexTurnStateHeader, codexTestState("a", 292))
 	applyConfiguredCodexTurnStateToRequest(account, req, "gpt-5.4", "different-token")
 	require.Nil(t, req.Context().Value(codexTurnStateRequestKey{}))
-	require.Equal(t, codexTestState("a", 292), req.Header.Get(openAICodexTurnStateHeader))
+	require.Empty(t, req.Header.Get(openAICodexTurnStateHeader), "managed accounts must not forward a candidate from a different credential")
 }

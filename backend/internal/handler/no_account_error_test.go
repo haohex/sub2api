@@ -76,6 +76,16 @@ func TestClassifySelectionFailureError_RateLimitedPool(t *testing.T) {
 	require.Equal(t, fallback, classifySelectionFailureError(fmt.Errorf("no available accounts"), fallback))
 }
 
+func TestClassifySelectionFailureError_HealthyStateUnavailable(t *testing.T) {
+	fallback := noAccountErrorClassification{Status: http.StatusNotFound, ErrType: "model_not_found", ModelNotFound: true}
+	got := classifySelectionFailureError(fmt.Errorf("no available accounts: high_compute_state_unavailable"), fallback)
+
+	require.Equal(t, http.StatusServiceUnavailable, got.Status)
+	require.Equal(t, "high_compute_state_unavailable", got.ErrType)
+	require.Contains(t, got.Message, "high-compute state")
+	require.False(t, got.ModelNotFound)
+}
+
 func TestClassifyNoAccountError_NilAPIKey_Falls503(t *testing.T) {
 	c := newTestGinContextWithRequest()
 	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: false}}

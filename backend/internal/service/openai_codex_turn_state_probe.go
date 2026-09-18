@@ -228,6 +228,9 @@ func ApplyConfiguredCodexTurnState(account *Account, headers http.Header, model,
 	if headers == nil {
 		return
 	}
+	if codexTurnStateProbeEnabled(account) && account.TargetsChatGPTCodexUpstream() {
+		headers.Del(openAICodexTurnStateHeader)
+	}
 	state := configuredCodexTurnState(account, model, token, time.Now())
 	if state == "" {
 		return
@@ -457,6 +460,9 @@ type CodexTurnStateProbeService struct {
 	requestDo     func(*http.Request, string) (*http.Response, error)
 	runtimeMu     sync.Mutex
 	runtime       map[codexTurnStatePoolKey]codexTurnStateProbeRuntime
+	importMu      sync.Mutex
+	importJobs    map[string]*CodexStateImportJob
+	importPending map[int64]bool
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -480,6 +486,8 @@ func NewCodexTurnStateProbeService(
 		tokenProvider: tokenProvider,
 		httpUpstream:  httpUpstream,
 		runtime:       make(map[codexTurnStatePoolKey]codexTurnStateProbeRuntime),
+		importJobs:    make(map[string]*CodexStateImportJob),
+		importPending: make(map[int64]bool),
 		stopCh:        make(chan struct{}),
 		wakeCh:        make(chan struct{}, 1),
 		ctx:           ctx,

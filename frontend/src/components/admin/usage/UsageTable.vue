@@ -292,41 +292,33 @@
         </template>
 
         <template #cell-turn_state="{ row }">
-          <div v-if="row.turn_state_sent_length != null || row.turn_state_returned_length != null" class="mb-1 font-mono text-xs">
-            {{ t('admin.accounts.statePool.sent') }} {{ row.turn_state_sent_length == null ? t('admin.accounts.statePool.notRecorded') : row.turn_state_sent_length === 0 ? t('admin.accounts.statePool.notSent') : row.turn_state_sent_length }}
-            → {{ t('admin.accounts.statePool.returned') }} {{ row.turn_state_returned_length == null ? t('admin.accounts.statePool.notRecorded') : row.turn_state_returned_length === 0 ? t('admin.accounts.statePool.notReturned') : row.turn_state_returned_length }}
-          </div>
-          <div v-if="row.turn_state && (row.turn_state_returned_length == null || row.turn_state.length === row.turn_state_returned_length)" class="flex max-w-[200px] items-center gap-1.5">
-            <!-- 长度是这列的重点：292 = 不降智，醒目标出来 -->
+          <div v-if="row.turn_state || row.turn_state_sent || row.turn_state_sent_length != null || row.turn_state_returned_length != null" class="flex max-w-[220px] items-center gap-1.5">
             <span
               class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
-              :class="row.turn_state.length === 292
+              :class="turnStateTone(row) === 'normal'
                 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+                : turnStateTone(row) === 'abnormal'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                  : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+              :title="turnStateToneTitle(row)"
             >
-              {{ row.turn_state.length }}
+              {{ turnStateDisplayLength(row) ?? '—' }}
             </span>
-            <span
-              v-if="row.turn_state_overridden"
-              class="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-              :title="t('admin.usage.turnStateOverridden')"
-            >
-              {{ t('admin.usage.turnStateOverriddenShort') }}
-            </span>
-            <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.turn_state">
-              {{ row.turn_state }}
+            <span v-if="turnStateValue(row)" class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="turnStateValue(row) || undefined">
+              {{ turnStateValue(row)!.slice(0, 24) }}{{ turnStateValue(row)!.length > 24 ? '…' : '' }}
             </span>
             <button
               type="button"
               class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
-              :class="copiedRequestId === row.turn_state ? 'text-green-500 hover:text-green-500' : ''"
-              :title="copiedRequestId === row.turn_state ? t('keys.copied') : t('keys.copyToClipboard')"
-              @click="copyTurnState(row.turn_state)"
+              :class="copiedRequestId === turnStateValue(row) ? 'text-green-500 hover:text-green-500' : ''"
+              :title="copiedRequestId === turnStateValue(row) ? t('keys.copied') : t('keys.copyToClipboard')"
+              v-if="turnStateValue(row)"
+              @click="copyTurnState(turnStateValue(row)!)"
             >
-              <Icon :name="copiedRequestId === row.turn_state ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+              <Icon :name="copiedRequestId === turnStateValue(row) ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
             </button>
           </div>
-          <span v-else-if="row.turn_state_sent_length == null && row.turn_state_returned_length == null" class="text-sm text-gray-400 dark:text-gray-500">{{ t('admin.accounts.statePool.notRecorded') }}</span>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">—</span>
         </template>
 
         <template #cell-user_agent="{ row }">
@@ -728,6 +720,52 @@ const copyUpstreamRequestId = (upstreamRequestId: string) =>
 
 const copyTurnState = (turnState: string) =>
   copyIdentifier(turnState, t('admin.usage.turnStateCopied'))
+
+const normalizeTurnStatePlan = (value?: string | null): string =>
+  (value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+
+const expectedTurnStateLength = (row: AdminUsageLog): number | null => {
+  if (row.turn_state_expected_length && row.turn_state_expected_length > 0) return row.turn_state_expected_length
+  switch (normalizeTurnStatePlan(row.account?.plan_type)) {
+    case 'plus':
+    case 'pro':
+    case 'chatgptpro':
+    case 'prolite':
+    case 'pro5x':
+    case 'pro20x':
+      return 292
+    case 'team':
+      return 332
+    default:
+      return null
+  }
+}
+
+const turnStateValue = (row: AdminUsageLog): string | null => row.turn_state || row.turn_state_sent || null
+
+const turnStateDisplayLength = (row: AdminUsageLog): number | null => {
+  if (row.turn_state_returned_length != null && row.turn_state_returned_length > 0) return row.turn_state_returned_length
+  if (row.turn_state_sent_length != null && row.turn_state_sent_length > 0) return row.turn_state_sent_length
+  return turnStateValue(row)?.length ?? null
+}
+
+const turnStateTone = (row: AdminUsageLog): 'normal' | 'abnormal' | 'unknown' => {
+  const length = turnStateDisplayLength(row)
+  const expected = expectedTurnStateLength(row)
+  if (length == null || expected == null) return 'unknown'
+  return length === expected ? 'normal' : 'abnormal'
+}
+
+const turnStateToneTitle = (row: AdminUsageLog): string => {
+  const expected = expectedTurnStateLength(row)
+  const tone = expected == null
+    ? t('admin.accounts.statePool.unknownPlan')
+    : turnStateTone(row) === 'normal'
+    ? t('admin.accounts.statePool.valid', { length: expected })
+    : t('admin.accounts.statePool.abnormalLength')
+  const source = row.turn_state ? t('admin.accounts.statePool.returned') : row.turn_state_sent ? t('admin.accounts.statePool.sent') : t('admin.accounts.statePool.notRecorded')
+  return `${tone} · ${source}`
+}
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)

@@ -44,11 +44,11 @@ func TestApplyConfiguredCodexTurnState_IsolatedByModelTokenAndTTL(t *testing.T) 
 
 	headers.Set(openAICodexTurnStateHeader, "client-state")
 	ApplyConfiguredCodexTurnState(account, headers, "gpt-5.4", "token-a")
-	require.Equal(t, "client-state", headers.Get(openAICodexTurnStateHeader), "another model must not reuse the candidate")
+	require.Empty(t, headers.Get(openAICodexTurnStateHeader), "another model must not forward a client state")
 
 	headers.Set(openAICodexTurnStateHeader, "client-state")
 	ApplyConfiguredCodexTurnState(account, headers, "gpt-5.5", "token-b")
-	require.Equal(t, "client-state", headers.Get(openAICodexTurnStateHeader), "another token must not reuse the candidate")
+	require.Empty(t, headers.Get(openAICodexTurnStateHeader), "another token must not forward a client state")
 
 	cache, ok := account.Extra[CodexTurnStateProbeCacheExtraKey].(map[string]any)
 	require.True(t, ok)
@@ -57,7 +57,17 @@ func TestApplyConfiguredCodexTurnState_IsolatedByModelTokenAndTTL(t *testing.T) 
 	entry["expires_at"] = now.Add(-time.Second).Format(time.RFC3339Nano)
 	headers.Set(openAICodexTurnStateHeader, "client-state")
 	ApplyConfiguredCodexTurnState(account, headers, "gpt-5.5", "token-a")
-	require.Equal(t, "client-state", headers.Get(openAICodexTurnStateHeader), "expired candidates must not be injected")
+	require.Empty(t, headers.Get(openAICodexTurnStateHeader), "expired candidates must not forward a client state")
+}
+
+func TestApplyConfiguredCodexTurnStateClearsClientBadValueWhenManagedCandidateMissing(t *testing.T) {
+	account := codexTurnStateTestAccount()
+	account.Extra[CodexTurnStateProbeEnabledExtraKey] = true
+	delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
+	headers := http.Header{}
+	headers.Set(openAICodexTurnStateHeader, strings.Repeat("x", 356))
+	ApplyConfiguredCodexTurnState(account, headers, "gpt-5.4", "review-token")
+	require.Empty(t, headers.Get(openAICodexTurnStateHeader))
 }
 
 func TestCodexTurnStateProbe_ClosesSSEAfterResponseHeaders(t *testing.T) {

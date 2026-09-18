@@ -31,6 +31,14 @@ func applyConfiguredCodexTurnStateToRequest(account *Account, req *http.Request,
 	if req == nil || req.Header == nil {
 		return
 	}
+	// A probe-managed Codex account must never forward a client-supplied or
+	// legacy override when its own candidate is unavailable.  Leaving the old
+	// header in place here was the source of requests carrying 312/356-byte
+	// values even though the managed pool only accepts the account's healthy
+	// length.
+	if codexTurnStateProbeEnabled(account) && account.TargetsChatGPTCodexUpstream() {
+		req.Header.Del(openAICodexTurnStateHeader)
+	}
 	state := configuredCodexTurnState(account, model, token, time.Now())
 	if state == "" {
 		return
@@ -196,6 +204,7 @@ func observeCodexTurnStateHTTPResponse(req *http.Request, resp *http.Response, a
 	}
 	if c, ok := req.Context().Value(codexTurnStateUsageContextKey{}).(*gin.Context); ok && account.TargetsChatGPTCodexUpstream() {
 		resetCodexStateUsageLengths(c, len(req.Header.Get(openAICodexTurnStateHeader)))
+		setCodexStateUsageSentValue(c, req.Header.Get(openAICodexTurnStateHeader))
 		previousHeader := observer.onHeader
 		observer.onHeader = func(state string) {
 			if previousHeader != nil {
@@ -363,6 +372,7 @@ func (s *OpenAIGatewayService) prepareCodexTurnStateWSFrame(ctx context.Context,
 	}
 	if account.TargetsChatGPTCodexUpstream() {
 		resetCodexStateUsageLengths(c, len(state))
+		setCodexStateUsageSentValue(c, state)
 	}
 	observer := newCodexTurnStateObservation(ctx, s.accountRepo, candidate, s.wakeCodexTurnStateProbe)
 	if observer == nil {
