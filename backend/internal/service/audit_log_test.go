@@ -198,3 +198,10 @@ func TestParseAuditLogRetentionDays(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactAuditBodyStateImport(t *testing.T) {
+	out := RedactAuditBody([]byte(`{"model":"gpt-6-astra","state":"pasted-state-secret"}`), "application/json")
+	if strings.Contains(out, "pasted-state-secret") || !strings.Contains(out, "gpt-6-astra") {
+		t.Fatalf("unexpected state import audit: %s", out)
+	}
+}

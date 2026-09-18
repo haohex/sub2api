@@ -787,6 +787,8 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
 		TurnState:               l.TurnState,
+		TurnStateSentLength:     l.TurnStateSentLength,
+		TurnStateReturnedLength: l.TurnStateReturnedLength,
 		TurnStateOverridden:     l.TurnStateOverridden,
 		TurnStateSource:         l.TurnStateSource,
 		BillingTier:             l.BillingTier,

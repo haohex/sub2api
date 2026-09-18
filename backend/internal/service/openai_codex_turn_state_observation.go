@@ -66,6 +66,8 @@ type codexTurnStateObservation struct {
 	expectedLength int
 	model          string
 	invalidate     func(string)
+	onHeader       func(string)
+	onDiagnostic   func(string)
 }
 
 func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, candidate *codexTurnStateRequest, wake func()) *codexTurnStateObservation {
@@ -73,7 +75,16 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 		return nil
 	}
 	accountID := candidate.accountID
-	return &codexTurnStateObservation{expectedLength: len(candidate.entry.State), model: candidate.model, invalidate: func(reason string) {
+	event := CodexStateEvent{AccountID: accountID, Model: candidate.model, Source: "business", SentLength: len(candidate.entry.State)}
+	return &codexTurnStateObservation{onHeader: func(state string) { event.ReturnedLength = len(state) }, onDiagnostic: func(reason string) {
+		e := event
+		e.Kind = "diagnostic"
+		e.Reason = reason
+		recordCodexStateEvent(repo, e)
+	}, expectedLength: len(candidate.entry.State), model: candidate.model, invalidate: func(reason string) {
+		event.Kind = "invalidation_observed"
+		event.Reason = reason
+		recordCodexStateEvent(repo, event)
 		// The client may disconnect on a failure frame. Persist the observation with
 		// a bounded, detached context so that cancellation cannot revive bad state.
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
@@ -91,6 +102,9 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 			cache := codexTurnStateCacheFromExtra(current.Extra)
 			entry, ok := cache[candidate.model]
 			if !ok || entry != candidate.entry {
+				event.Kind = "invalidation_skipped"
+				event.Reason = "candidate_already_changed"
+				recordCodexStateEvent(repo, event)
 				return
 			}
 			delete(cache, candidate.model)
@@ -102,6 +116,9 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 				return
 			}
 			if saved {
+				event.Kind = "invalidated"
+				event.Reason = reason
+				recordCodexStateEvent(repo, event)
 				slog.Info("codex_turn_state_invalidated", "account_id", accountID, "model", candidate.model, "reason", reason)
 				if wake != nil {
 					wake()
@@ -114,12 +131,15 @@ func newCodexTurnStateObservation(ctx context.Context, repo AccountRepository, c
 }
 
 func (o *codexTurnStateObservation) observeReason(reason string) {
-	if o != nil && reason != "" {
+	if o != nil && o.invalidate != nil && reason != "" {
 		o.once.Do(func() { o.invalidate(reason) })
 	}
 }
 
 func (o *codexTurnStateObservation) observeHeader(state string) {
+	if o != nil && o.onHeader != nil {
+		o.onHeader(state)
+	}
 	if o != nil && state != "" && o.expectedLength > 0 && len(state) != o.expectedLength {
 		o.observeReason("unexpected_state_length")
 	}
@@ -131,6 +151,9 @@ func (o *codexTurnStateObservation) observeEvent(payload []byte, eventType strin
 	}
 	if eventType == "" {
 		eventType = gjson.GetBytes(payload, "type").String()
+	}
+	if o.onDiagnostic != nil && (gjson.GetBytes(payload, "error.code").String() == "invalid_encrypted_content" || gjson.GetBytes(payload, "response.error.code").String() == "invalid_encrypted_content") {
+		o.onDiagnostic("invalid_encrypted_content")
 	}
 	if eventType == "response.created" && o.model != "gpt-5.6-luna" && gjson.GetBytes(payload, "response.model").String() == "gpt-5.6-luna" {
 		o.observeReason("response_created_gpt_5_6_luna")
@@ -160,18 +183,26 @@ func (o *codexTurnStateObservation) observeEvent(payload []byte, eventType strin
 }
 
 func observeCodexTurnStateHTTPResponse(req *http.Request, resp *http.Response, account *Account, repo AccountRepository, wake func()) {
-	if req == nil || resp == nil || account == nil {
+	if req == nil || resp == nil || account == nil || !account.TargetsChatGPTCodexUpstream() {
 		return
 	}
 	candidate, _ := req.Context().Value(codexTurnStateRequestKey{}).(*codexTurnStateRequest)
-	// Plugins may have replaced an outbound header. Do not blame a candidate
-	// unless that candidate was still on the actual request.
-	if candidate == nil || req.Header.Get(openAICodexTurnStateHeader) != candidate.entry.State {
-		return
+	var observer *codexTurnStateObservation
+	if candidate != nil && req.Header.Get(openAICodexTurnStateHeader) == candidate.entry.State {
+		observer = newCodexTurnStateObservation(req.Context(), repo, candidate, wake)
 	}
-	observer := newCodexTurnStateObservation(req.Context(), repo, candidate, wake)
 	if observer == nil {
-		return
+		observer = &codexTurnStateObservation{}
+	}
+	if c, ok := req.Context().Value(codexTurnStateUsageContextKey{}).(*gin.Context); ok && account.TargetsChatGPTCodexUpstream() {
+		resetCodexStateUsageLengths(c, len(req.Header.Get(openAICodexTurnStateHeader)))
+		previousHeader := observer.onHeader
+		observer.onHeader = func(state string) {
+			if previousHeader != nil {
+				previousHeader(state)
+			}
+			c.Set("codex_state_returned_length", len(state))
+		}
 	}
 	observer.observeHeader(resp.Header.Get(openAICodexTurnStateHeader))
 	if resp.Body != nil {
@@ -330,7 +361,23 @@ func (s *OpenAIGatewayService) prepareCodexTurnStateWSFrame(ctx context.Context,
 	if candidate != nil {
 		markOpenAITurnStateInjected(c, candidate.entry.State, turnStateSourceProbe)
 	}
-	return payload, newCodexTurnStateObservation(ctx, s.accountRepo, candidate, s.wakeCodexTurnStateProbe)
+	if account.TargetsChatGPTCodexUpstream() {
+		resetCodexStateUsageLengths(c, len(state))
+	}
+	observer := newCodexTurnStateObservation(ctx, s.accountRepo, candidate, s.wakeCodexTurnStateProbe)
+	if observer == nil {
+		observer = &codexTurnStateObservation{}
+	}
+	previousHeader := observer.onHeader
+	observer.onHeader = func(value string) {
+		if previousHeader != nil {
+			previousHeader(value)
+		}
+		if c != nil {
+			c.Set("codex_state_returned_length", len(value))
+		}
+	}
+	return payload, observer
 }
 
 // Retries within one forwarding call can retain the original Account snapshot.
@@ -374,11 +421,11 @@ func noteCodexTurnStateProbeUsage(c *gin.Context, req *http.Request) {
 	if req == nil {
 		return
 	}
+	if c != nil {
+		*req = *req.WithContext(context.WithValue(req.Context(), codexTurnStateUsageContextKey{}, c))
+	}
 	candidate, _ := req.Context().Value(codexTurnStateRequestKey{}).(*codexTurnStateRequest)
 	if candidate != nil {
 		markOpenAITurnStateInjected(c, candidate.entry.State, turnStateSourceProbe)
-		if c != nil {
-			*req = *req.WithContext(context.WithValue(req.Context(), codexTurnStateUsageContextKey{}, c))
-		}
 	}
 }

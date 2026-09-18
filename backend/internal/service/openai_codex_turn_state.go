@@ -2,9 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -253,32 +251,16 @@ func (s *OpenAIGatewayService) sweepOpenAICodexTurnStateOrigins() {
 	})
 }
 
-// openAITurnStateOverrideExtraKey 是账号级 turn-state 覆写开关。空值=功能不存在，
-// 出站行为与改动前逐字节一致。
-//
-// 用途是排查「回合状态影响上游算力档位」这类假设：turn-state 由上游每轮新铸、
-// 绑死在铸它的那个 session 上，真实 Codex 客户端自己管理它（每轮新建的 OnceLock），
-// 外部注入不进去，只能在网关这一层强制改写。
+// Historical configuration key, discarded on edits and never used for injection.
 const openAITurnStateOverrideExtraKey = "openai_turn_state_override"
-
-// maxOpenAITurnStateOverrideLen 是覆写值长度上限。实测 blob 为 292/312 字符，
-// 留足余量的同时挡住把整个请求体误粘进来这类事故。
-const maxOpenAITurnStateOverrideLen = 4096
 
 // maxUsageCodexTurnStateLen 是写进 usage_logs 的上游观测值上限。与写入校验上限
 // 分开：一个约束管理员能配什么，一个约束我们记什么，语义不同不该共用常量
 // （对照 maxUsageUpstreamRequestIDLen）。实测 blob 为 292/312 字符。
 const maxUsageCodexTurnStateLen = 4096
 
-// OpenAICodexTurnStateOverride 返回账号配置的 turn-state 覆写值；未配置或账号类型
-// 不适用时返回空串。只对最终落到 ChatGPT Codex 后端的账号生效（oauth / setup-token /
-// cpr）——其余上游根本不认这个头，写进去是纯污染。
-func (a *Account) OpenAICodexTurnStateOverride() string {
-	if a == nil || !a.TargetsChatGPTCodexUpstream() {
-		return ""
-	}
-	return strings.TrimSpace(a.GetExtraString(openAITurnStateOverrideExtraKey))
-}
+// OpenAICodexTurnStateOverride keeps compatibility with old callers without activating retired configuration.
+func (a *Account) OpenAICodexTurnStateOverride() string { return "" }
 
 // applyOpenAICodexTurnStateOverrideWSManualOnly 是 WS 路径的值形态入口：只应用手填覆写。
 //
@@ -318,58 +300,13 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnStateOverrideHeader(c *gin.Co
 	}
 }
 
-// ValidateOpenAITurnStateAutoExtra 校验自动接管开关只能是 bool。
-// 写成字符串 "true" 时 getExtraBool 返回 false，开关静默失效——UI 之外用 API
-// 配置时最容易踩这个。候选池等运行态键由网关维护，不在这里校验。
+// Retired configuration keys are discarded on ordinary account edits.
 func ValidateOpenAITurnStateAutoExtra(extra map[string]any) error {
-	if extra == nil {
-		return nil
-	}
-	raw, ok := extra[openAITurnStateAutoExtraKey]
-	if !ok || raw == nil {
-		return nil
-	}
-	if _, ok := raw.(bool); !ok {
-		return fmt.Errorf("%s must be a boolean", openAITurnStateAutoExtraKey)
-	}
+	delete(extra, openAITurnStateAutoExtraKey)
 	return nil
 }
-
-// ValidateOpenAITurnStateOverrideExtra 校验并规范化 extra 里的 turn-state 覆写值。
-// 空白视为未配置并从 extra 中移除。非空时必须是 Fernet 信封形状——urlsafe base64、
-// 解出至少 57 字节（1 版本 + 8 时间戳 + 16 IV + 32 HMAC）、首字节 0x80。
-// 这道校验挡的是手滑粘错内容后把垃圾原样发给上游。
 func ValidateOpenAITurnStateOverrideExtra(extra map[string]any) error {
-	if extra == nil {
-		return nil
-	}
-	raw, ok := extra[openAITurnStateOverrideExtraKey]
-	if !ok {
-		return nil
-	}
-	value, ok := raw.(string)
-	if !ok {
-		return fmt.Errorf("%s must be a string", openAITurnStateOverrideExtraKey)
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		delete(extra, openAITurnStateOverrideExtraKey)
-		return nil
-	}
-	if len(value) > maxOpenAITurnStateOverrideLen {
-		return fmt.Errorf("%s exceeds %d characters", openAITurnStateOverrideExtraKey, maxOpenAITurnStateOverrideLen)
-	}
-	decoded, err := base64.URLEncoding.WithPadding(base64.StdPadding).DecodeString(value)
-	if err != nil {
-		decoded, err = base64.RawURLEncoding.DecodeString(value)
-	}
-	if err != nil {
-		return fmt.Errorf("%s must be urlsafe base64", openAITurnStateOverrideExtraKey)
-	}
-	if len(decoded) < 57 || decoded[0] != 0x80 {
-		return fmt.Errorf("%s does not look like a Codex turn-state blob", openAITurnStateOverrideExtraKey)
-	}
-	extra[openAITurnStateOverrideExtraKey] = value
+	delete(extra, openAITurnStateOverrideExtraKey)
 	return nil
 }
 

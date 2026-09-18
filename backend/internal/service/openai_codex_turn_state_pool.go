@@ -42,6 +42,9 @@ type CodexTurnStatePoolRow struct {
 	StateLength    int        `json:"state_length"`
 	StateStatus    string     `json:"state_status"`
 	ObtainedAt     *time.Time `json:"obtained_at,omitempty"`
+	IssuedAt       *time.Time `json:"issued_at,omitempty"`
+	Mode           string     `json:"mode"`
+	NextProbeAt    *time.Time `json:"next_probe_at,omitempty"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 	ProbeStatus    string     `json:"probe_status"`
 	Attempts       int        `json:"attempts"`
@@ -199,7 +202,9 @@ func (s *CodexTurnStateProbeService) Pool(ctx context.Context) (*CodexTurnStateP
 				row.StateLength = len(entry.State)
 				row.ObtainedAt = &entry.ObtainedAt
 				row.LastAttemptAt = &entry.ObtainedAt
-				row.ExpiresAt = &entry.ExpiresAt
+				issued, expires, _ := codexStateTimes(entry.State, entry.ObtainedAt, now)
+				row.IssuedAt = &issued
+				row.ExpiresAt = &expires
 				switch {
 				case validCodexTurnStateCacheEntry(entry, row.ExpectedLength, account.GetOpenAIAccessToken(), now):
 					row.StateStatus = "valid"
@@ -222,9 +227,7 @@ func (s *CodexTurnStateProbeService) Pool(ctx context.Context) (*CodexTurnStateP
 				if row.StateStatus == "missing" && failure.Reason != "" && failure.Reason != "probe_failed" {
 					row.StateStatus = "invalid"
 				}
-				if failure.Attempts >= codexTurnStateProbeMaxAttempts {
-					row.ProbeStatus = "stopped"
-				}
+
 			}
 			if live, ok := runtime[codexTurnStatePoolKey{account.ID, model}]; ok {
 				if live.Status == "queued" || live.Status == "running" {
@@ -233,11 +236,30 @@ func (s *CodexTurnStateProbeService) Pool(ctx context.Context) (*CodexTurnStateP
 				}
 				if row.LastAttemptAt == nil || live.UpdatedAt.After(*row.LastAttemptAt) {
 					row.LastAttemptAt = &live.UpdatedAt
+					row.Attempts = live.Attempts
+					row.Reason = live.Reason
 				}
 			}
-			row.CanRefresh = row.Enabled && row.ExpectedLength > 0 && account.Status == StatusActive && config.Available && row.ProbeStatus != "running" && row.ProbeStatus != "queued"
+			entry := cache[model]
+			row.Mode = codexStateMode(entry, row.ExpectedLength, account.GetOpenAIAccessToken(), now)
+			s.scheduleMu.Lock()
+			if scheduled := s.schedules[codexTurnStatePoolKey{account.ID, model}]; scheduled != nil {
+				row.Mode = scheduled.Mode
+				next := scheduled.Next
+				row.NextProbeAt = &next
+			}
+			busy := s.active[account.ID]
+			s.scheduleMu.Unlock()
+			if row.Mode == "continuous" {
+				row.ProbeStatus = "queued"
+			}
+			if busy {
+				row.ProbeStatus = "running"
+			}
+			row.CanRefresh = row.Enabled && row.ExpectedLength > 0 && account.Status == StatusActive && config.Available && !busy
 			if !config.Available || account.Status != StatusActive || !row.Enabled || row.ExpectedLength == 0 {
 				row.ProbeStatus = "blocked"
+				row.Mode = "paused"
 			}
 			result.Items = append(result.Items, row)
 		}

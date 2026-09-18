@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1412,7 +1411,7 @@ func TestCPRPlanGatedModelCoolsDownLikeOAuth(t *testing.T) {
 // TestOpenAITurnStateOverrideAppliesToCodexUpstreams 锁定账号级 turn-state 覆写的适用范围
 // 与优先级：oauth / setup-token / cpr 三种落到 ChatGPT Codex 后端的账号都生效，
 // 其余上游一个字节都不碰；覆写必须能盖过守卫的剥离结果。
-func TestOpenAITurnStateOverrideAppliesToCodexUpstreams(t *testing.T) {
+func TestRetiredTurnStateOverrideDoesNotApplyToCodexUpstreams(t *testing.T) {
 	const blob = "gAAAAABqqrNHYSOlO_EUJI-hlduVBqJ8slR-floDb7J"
 	svc := &OpenAIGatewayService{}
 	withOverride := func(platform, accType string) *Account {
@@ -1430,20 +1429,19 @@ func TestOpenAITurnStateOverrideAppliesToCodexUpstreams(t *testing.T) {
 		{PlatformOpenAI, AccountTypeCPR},
 	} {
 		acc := withOverride(tc.platform, tc.accType)
-		require.Equal(t, blob, acc.OpenAICodexTurnStateOverride(), "%s/%s 应支持覆写", tc.platform, tc.accType)
+		require.Empty(t, acc.OpenAICodexTurnStateOverride())
 
 		h := http.Header{}
 		h.Set(openAICodexTurnStateHeader, "客户端自己回带的旧值")
 		svc.applyOpenAICodexTurnStateOverrideHeader(newTurnStateTestCtx(), acc, h)
-		require.Equal(t, blob, h.Get(openAICodexTurnStateHeader), "覆写必须盖过客户端回带值")
+		require.Equal(t, "客户端自己回带的旧值", h.Get(openAICodexTurnStateHeader))
 
 		// 守卫剥光之后（头已不存在）覆写照样要写进去，否则「配了但不生效」
 		stripped := http.Header{}
 		svc.applyOpenAICodexTurnStateOverrideHeader(newTurnStateTestCtx(), acc, stripped)
-		require.Equal(t, blob, stripped.Get(openAICodexTurnStateHeader), "守卫剥离后覆写仍须生效")
+		require.Empty(t, stripped.Get(openAICodexTurnStateHeader))
 
-		require.Equal(t, blob,
-			svc.applyOpenAICodexTurnStateOverrideWSManualOnly(newTurnStateTestCtx(), acc, ""), "值形态（WS 路径）同样生效")
+		require.Empty(t, svc.applyOpenAICodexTurnStateOverrideWSManualOnly(newTurnStateTestCtx(), acc, ""))
 	}
 
 	// 不适用：上游不是 Codex 后端的账号，一个字节都不能碰
@@ -1478,36 +1476,12 @@ func newTurnStateTestCtx() *gin.Context {
 	return c
 }
 
-// TestValidateOpenAITurnStateOverrideExtra 钉住写入校验：只放行 Fernet 信封形状。
-func TestValidateOpenAITurnStateOverrideExtra(t *testing.T) {
-	// 真实捕获样本（pro3，292 字符）
-	const real = "gAAAAABqqrNHYSOlO_EUJI-hlduVBqJ8slR-floDb7J-ZYvvLXj7WV7dOZ_zk10RDMl_N4dRvG0UqxWR19XdSGbeHFUEAzwv7yQBADQrB1QhpOKkfcUPeSy2qsvZIvq__OHHoF2yCZfSTPq6YvkKahwLUxkeORhQZ9Ug86sMJwkrJXUefsa6fTpRqzZSN7SLphKU-6Ys6FV3GveSXjgk0UcCaKvfShFj4_EmGriyCb-JVoU0D8LJbjsClcivKgDNu1jfZfF-6q8VXHGF1Uck7vDVXdiNh1kRXw=="
-
-	extra := map[string]any{openAITurnStateOverrideExtraKey: real}
+func TestRetiredStateConfigurationIsDroppedDuringValidation(t *testing.T) {
+	extra := map[string]any{openAITurnStateOverrideExtraKey: "obsolete", openAITurnStateAutoExtraKey: "true", "unrelated": 1}
 	require.NoError(t, ValidateOpenAITurnStateOverrideExtra(extra))
-	require.Equal(t, real, extra[openAITurnStateOverrideExtraKey])
-
-	// 空白 = 未配置，直接从 extra 移除（否则空串会被当成"已配置"存进 DB）
-	blank := map[string]any{openAITurnStateOverrideExtraKey: "   "}
-	require.NoError(t, ValidateOpenAITurnStateOverrideExtra(blank))
-	require.NotContains(t, blank, openAITurnStateOverrideExtraKey)
-
-	// 没这个键 = 不干预
-	require.NoError(t, ValidateOpenAITurnStateOverrideExtra(map[string]any{"other": 1}))
+	require.NoError(t, ValidateOpenAITurnStateAutoExtra(extra))
+	require.Equal(t, map[string]any{"unrelated": 1}, extra)
 	require.NoError(t, ValidateOpenAITurnStateOverrideExtra(nil))
-
-	for name, bad := range map[string]any{
-		"非字符串":     123,
-		"不是base64": "这不是 base64!!",
-		"太短":       "gAAA",
-		"版本字节不对":   base64.URLEncoding.EncodeToString(append([]byte{0x79}, make([]byte, 80)...)),
-		"超长":       strings.Repeat("A", maxOpenAITurnStateOverrideLen+1),
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.Error(t, ValidateOpenAITurnStateOverrideExtra(
-				map[string]any{openAITurnStateOverrideExtraKey: bad}))
-		})
-	}
 }
 
 // TestUsageCodexTurnStateRecording 锁定使用记录里两列的取值来源。

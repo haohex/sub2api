@@ -302,12 +302,12 @@ func TestCodexTurnStateShadowRowWSV2OwnerIsParentIdentity(t *testing.T) {
 	}
 }
 
-// TestOpenAITurnStateOverrideBeatsEchoGuard 钉住账号级覆写与回声守卫的先后顺序。
+// TestRetiredTurnStateOverrideCannotBypassEchoGuard 钉住账号级覆写与回声守卫的先后顺序。
 //
 // 覆写必须排在 guardOpenAICodexTurnStateEcho 之后：守卫只剥不注，而覆写是管理员的
 // 显式动作。两者顺序颠倒时，凡是守卫会剥的场景（覆写值恰好是别的凭证域铸的——排查
 // 「跨账号复用 turn-state」时这正是主用法）就会「配了但静默失效」。
-func TestOpenAITurnStateOverrideBeatsEchoGuard(t *testing.T) {
+func TestRetiredTurnStateOverrideCannotBypassEchoGuard(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	parent, _, other := codexShadowTestRows(true)
 	const override = "gAAAAABoverride-blob-from-another-credential-domain"
@@ -335,6 +335,5 @@ func TestOpenAITurnStateOverrideBeatsEchoGuard(t *testing.T) {
 	_, err := svc.Forward(context.Background(), c, parent, body)
 	require.NoError(t, err)
 	require.Len(t, up.requests, 1)
-	require.Equal(t, override, up.requests[0].Header.Get(openAICodexTurnStateHeader),
-		"覆写排在守卫之前的话，这里会是空——配置静默失效")
+	require.Empty(t, up.requests[0].Header.Get(openAICodexTurnStateHeader), "retired override must not restore a foreign account state")
 }

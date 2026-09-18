@@ -81,7 +81,7 @@ type proxyProbeService struct {
 }
 
 func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*service.ProxyExitInfo, int64, error) {
-	client, err := httpclient.GetClient(httpclient.Options{
+	client, err := httpclient.NewIsolatedClient(httpclient.Options{
 		ProxyURL:           proxyURL,
 		Timeout:            defaultProxyProbeTimeout,
 		InsecureSkipVerify: s.insecureSkipVerify,
@@ -242,4 +242,17 @@ func (s *proxyProbeService) parseChatGPTTrace(body []byte, latencyMs int64) (*se
 		info.CountryCode = loc
 	}
 	return info, latencyMs, nil
+}
+
+// ProbeProxyOnce queries exactly one exit endpoint for a state acquisition attempt.
+func (s *proxyProbeService) ProbeProxyOnce(ctx context.Context, proxyURL string) (*service.ProxyExitInfo, int64, error) {
+	client, err := httpclient.NewIsolatedClient(httpclient.Options{ProxyURL: proxyURL, Timeout: 5 * time.Second, ValidateResolvedIP: s.validateResolvedIP, AllowPrivateHosts: s.allowPrivateHosts})
+	if err != nil {
+		return nil, 0, err
+	}
+	target := configuredProbeTarget{url: probeURLs[0].url, parser: probeURLs[0].parser}
+	if len(s.configuredProbeURLs) > 0 {
+		target = s.configuredProbeURLs[0]
+	}
+	return s.probeWithURL(ctx, client, target.url, target.parser)
 }

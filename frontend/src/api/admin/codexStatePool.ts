@@ -16,6 +16,9 @@ export interface StatePoolRow {
   expected_length: number
   state_length: number
   state_status: 'valid' | 'expired' | 'missing' | 'invalid' | 'unknown_plan' | 'disabled'
+  issued_at?: string
+  mode?: string
+  next_probe_at?: string
   obtained_at?: string
   expires_at?: string
   probe_status: 'idle' | 'queued' | 'running' | 'stopped' | 'blocked'
@@ -44,4 +47,17 @@ export async function refreshState(row: StatePoolRow): Promise<void> {
 export async function getStateValue(row: StatePoolRow): Promise<string> {
   const { data } = await apiClient.get<{ state: string }>(`/admin/accounts/${row.account_id}/codex-turn-state-probe/state`, { params: { model: row.model } })
   return data.state
+}
+
+export interface StateEvent {
+  id: number; account_id: number; model: string; kind: string; source: string; reason: string; attempt: number
+  proxy_id: number; proxy_name: string; proxy_address: string; reference_ip: string; ip_status: string
+  http_status: number; sent_length: number; returned_length: number; duration_ms: number; created_at: string
+}
+export async function getStateEvents(row: StatePoolRow, before = 0): Promise<StateEvent[]> {
+  const { data } = await apiClient.get<{items: StateEvent[]}>(`/admin/accounts/${row.account_id}/codex-turn-state-probe/events`, { params: { model: row.model, before } })
+  return data.items
+}
+export async function importState(row: StatePoolRow, state: string): Promise<void> {
+  await apiClient.post(`/admin/accounts/${row.account_id}/codex-turn-state-probe/import`, { model: row.model, state }, { timeout: 30000 })
 }

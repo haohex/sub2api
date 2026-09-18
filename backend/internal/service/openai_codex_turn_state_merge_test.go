@@ -39,12 +39,12 @@ func TestCodexTurnStateProbeTakesPriorityOverMainAutoAndManual(t *testing.T) {
 	state, source = svc.resolveOpenAITurnStateOverride(c, account)
 	require.Empty(t, state)
 	require.Empty(t, source)
-	// Turning off our feature restores the main branch's original functionality.
+	// Disabling our feature must not reactivate retired legacy settings.
 	account.Extra[CodexTurnStateProbeEnabledExtraKey] = false
 	fresh := turnStateAutoCtx("probe-wins")
 	state, source = svc.resolveOpenAITurnStateOverride(fresh, account)
-	require.Equal(t, "legacy-auto", state)
-	require.Equal(t, turnStateSourceAuto, source)
+	require.Empty(t, state)
+	require.Empty(t, source)
 }
 
 func TestCodexTurnStateProbePreservesMainUsageSource(t *testing.T) {
@@ -60,10 +60,10 @@ func TestCodexTurnStateProbePreservesMainUsageSource(t *testing.T) {
 	svc := &OpenAIGatewayService{accountRepo: repo}
 	out, observer := svc.prepareCodexTurnStateWSFrame(context.Background(), c, account, []byte(`{"type":"response.create","model":"gpt-5.4"}`), "client-state", "review-token", nil)
 	require.NotNil(t, observer)
-	require.Equal(t, strings.Repeat("a", 292), gjson.GetBytes(out, "client_metadata."+openAICodexTurnStateHeader).String())
+	require.Equal(t, codexTestState("a", 292), gjson.GetBytes(out, "client_metadata."+openAICodexTurnStateHeader).String())
 	require.Equal(t, "probe", OpenAITurnStateUsageSource(c))
 	delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
 	_, observer = svc.prepareCodexTurnStateWSFrame(context.Background(), c, account, []byte(`{"type":"response.create","model":"gpt-5.4"}`), "client-state", "review-token", nil)
-	require.Nil(t, observer)
+	require.Nil(t, observer.invalidate)
 	require.Empty(t, OpenAITurnStateUsageSource(c), "a later WS turn without injection must not retain the previous usage marker")
 }

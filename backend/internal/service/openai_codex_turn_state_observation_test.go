@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +54,7 @@ func TestCodexTurnStateEarlyInvalidationSignals(t *testing.T) {
 		{name: "312 byte response header", header: strings.Repeat("x", 312), invalid: true},
 		{name: "312 byte WS metadata", payload: `{"type":"response.metadata","headers":{"X-Codex-Turn-State":"` + strings.Repeat("x", 312) + `"}}`, invalid: true},
 		{name: "normal completion", payload: `{"type":"response.completed","response":{"model":"gpt-6-astra"}}`},
-		{name: "normal header", header: strings.Repeat("x", 292)},
+		{name: "normal header", header: codexTestState("x", 292)},
 		{name: "quoted error is not a signal", payload: `{"type":"response.output_text.delta","delta":"server_is_overloaded gpt-5.6-luna"}`},
 		{name: "another error", payload: `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded"}}}`},
 		{name: "other model mismatch is not the specified signal", payload: `{"type":"response.created","response":{"model":"gpt-5.5"}}`},
@@ -95,7 +94,7 @@ func TestCodexTurnStateLateFailureKeepsRenewedCandidate(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
 	observation := newCodexTurnStateObservation(context.Background(), repo, candidate, nil)
 	replacement := cache["gpt-5.4"]
-	replacement.State = strings.Repeat("n", 292)
+	replacement.State = codexTestState("n", 292)
 	replacement.ObtainedAt = time.Now().UTC()
 	replacement.ExpiresAt = replacement.ObtainedAt.Add(time.Hour)
 	account.Extra[CodexTurnStateProbeCacheExtraKey] = codexTurnStateCacheToExtra(map[string]codexTurnStateCacheEntry{"gpt-5.4": replacement})
@@ -154,41 +153,6 @@ func TestCodexTurnStateRetryPreservesUnexpiredState(t *testing.T) {
 	require.Empty(t, codexTurnStateProbeFailuresFromExtra(account.Extra))
 }
 
-func TestCodexTurnStateProbeBudgetAndTimeout(t *testing.T) {
-	require.Equal(t, 10*time.Second, codexTurnStateProbeTimeout)
-	require.Equal(t, 25, codexTurnStateProbeMaxAttempts)
-	account := codexTurnStateTestAccount()
-	delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
-	upstream := &httpUpstreamRecorder{err: errors.New("offline proxy")}
-	svc := NewCodexTurnStateProbeService(repo, &codexTurnStateTestProxyRepo{}, nil, upstream)
-	defer svc.Stop()
-	require.NoError(t, svc.refreshAccount(context.Background(), account, CodexTurnStateProbeConfig{Enabled: true, ProxyID: 23}))
-	require.Len(t, upstream.requests, 25)
-	deadline, ok := upstream.lastReq.Context().Deadline()
-	require.True(t, ok)
-	require.WithinDuration(t, time.Now().Add(10*time.Second), deadline, time.Second)
-	failures := codexTurnStateProbeFailuresFromExtra(account.Extra)
-	require.Equal(t, 25, failures["gpt-5.4"].Attempts)
-	require.NoError(t, svc.refreshAccount(context.Background(), account, CodexTurnStateProbeConfig{Enabled: true, ProxyID: 23}))
-	require.Len(t, upstream.requests, 25, "exhausted model stays paused")
-}
-
-func TestCodexTurnStateFailedRenewalKeepsCurrentState(t *testing.T) {
-	account := codexTurnStateTestAccount()
-	cache := codexTurnStateCacheFromExtra(account.Extra)
-	entry := cache["gpt-5.4"]
-	entry.ObtainedAt = time.Now().UTC().Add(-56 * time.Minute)
-	entry.ExpiresAt = entry.ObtainedAt.Add(time.Hour)
-	cache["gpt-5.4"] = entry
-	account.Extra[CodexTurnStateProbeCacheExtraKey] = codexTurnStateCacheToExtra(cache)
-	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
-	svc := NewCodexTurnStateProbeService(repo, &codexTurnStateTestProxyRepo{}, nil, &httpUpstreamRecorder{err: errors.New("offline proxy")})
-	defer svc.Stop()
-	require.NoError(t, svc.refreshAccount(context.Background(), account, CodexTurnStateProbeConfig{Enabled: true, ProxyID: 23}))
-	require.Equal(t, entry, codexTurnStateCacheFromExtra(account.Extra)["gpt-5.4"])
-}
-
 func TestCodexTurnStateLegacyFailureBudgetStaysStopped(t *testing.T) {
 	failures := codexTurnStateProbeFailuresFromExtra(map[string]any{CodexTurnStateProbeFailureExtraKey: map[string]any{"gpt-5.4": map[string]any{"attempts": 50, "failed_at": time.Now().Format(time.RFC3339Nano)}}})
 	require.Equal(t, 25, failures["gpt-5.4"].Attempts)
@@ -202,7 +166,7 @@ func TestCodexTurnStateWSUsesFreshCandidateAndFinalModel(t *testing.T) {
 	require.NoError(t, err)
 	cache := codexTurnStateCacheFromExtra(account.Extra)
 	entry := cache["gpt-5.4"]
-	entry.State = strings.Repeat("n", 292)
+	entry.State = codexTestState("n", 292)
 	cache["gpt-5.4"] = entry
 	account.Extra[CodexTurnStateProbeCacheExtraKey] = codexTurnStateCacheToExtra(cache)
 	svc := &OpenAIGatewayService{accountRepo: repo}
@@ -274,8 +238,8 @@ func TestCodexTurnStateHTTPRetryDoesNotReuseInvalidatedSnapshot(t *testing.T) {
 func TestCodexTurnStateHTTPDoesNotAttributeUnmanagedHeader(t *testing.T) {
 	account := codexTurnStateTestAccount()
 	req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
-	req.Header.Set(openAICodexTurnStateHeader, strings.Repeat("a", 292))
+	req.Header.Set(openAICodexTurnStateHeader, codexTestState("a", 292))
 	applyConfiguredCodexTurnStateToRequest(account, req, "gpt-5.4", "different-token")
 	require.Nil(t, req.Context().Value(codexTurnStateRequestKey{}))
-	require.Equal(t, strings.Repeat("a", 292), req.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, codexTestState("a", 292), req.Header.Get(openAICodexTurnStateHeader))
 }

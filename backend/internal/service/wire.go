@@ -286,8 +286,8 @@ func ProvideAccountTestService(
 
 // ProvideCodexTurnStateProbeService creates and starts the account-level
 // Codex turn-state candidate refresher. It is intentionally separate from the
-// interactive account-test service because probes stop at response headers and
-// must never stream a full model answer.
+// interactive account-test service. Acquisition and manual validation use
+// isolated SSE transports and bounded per-request deadlines.
 func ProvideCodexTurnStateProbeService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -295,9 +295,11 @@ func ProvideCodexTurnStateProbeService(
 	httpUpstream HTTPUpstream,
 	gateway *OpenAIGatewayService,
 	settings SettingRepository,
+	exitProber ProxyExitInfoProber,
 ) *CodexTurnStateProbeService {
 	svc := NewCodexTurnStateProbeService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
 	svc.settingRepo = settings
+	svc.exitProber = exitProber
 	if gateway != nil {
 		gateway.codexTurnStateProbe = svc
 	}

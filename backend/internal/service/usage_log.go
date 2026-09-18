@@ -192,7 +192,9 @@ type UsageLog struct {
 	UpstreamRequestID *string
 	// TurnState 是上游本次响应头里新铸的 x-codex-turn-state（不透明 Fernet 密文）。
 	// 非 Codex 上游、以及拿不到上游响应头的路径为 nil。
-	TurnState *string
+	TurnStateSentLength     *int
+	TurnStateReturnedLength *int
+	TurnState               *string
 	// TurnStateOverridden 表示本次出站实际注入了 turn-state 覆写值。
 	// nil 表示账号类型不适用（非 Codex 上游）。
 	TurnStateOverridden *bool
