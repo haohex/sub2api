@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import en from '@/i18n/locales/en'
 import CodexStatePoolView from '../CodexStatePoolView.vue'
 
-const api = vi.hoisted(() => ({ getStatePool: vi.fn(), saveStatePoolProxy: vi.fn(), refreshState: vi.fn(), getStateValue: vi.fn(), getStateEvents: vi.fn(), importState: vi.fn(), copy: vi.fn(), success: vi.fn(), error: vi.fn() }))
+const api = vi.hoisted(() => ({ getStatePool: vi.fn(), saveStatePoolProxy: vi.fn(), refreshState: vi.fn(), getStateValue: vi.fn(), getStateEvents: vi.fn(), importState: vi.fn(), getImportJob: vi.fn(), copy: vi.fn(), success: vi.fn(), error: vi.fn() }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, values: Record<string, unknown> = {}) => {
   const message = key.split('.').reduce<unknown>((value, part) => (value as Record<string, unknown>)?.[part], en)
   return String(message ?? key).replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? ''))
@@ -25,7 +25,7 @@ async function render() {
   await flushPromises()
   return wrapper
 }
-beforeEach(() => { vi.clearAllMocks(); api.getStatePool.mockResolvedValue(data()); api.refreshState.mockResolvedValue(undefined); api.getStateValue.mockResolvedValue('t'.repeat(332)); api.copy.mockResolvedValue(true); api.getStateEvents.mockResolvedValue([]); api.importState.mockResolvedValue(undefined) })
+beforeEach(() => { vi.clearAllMocks(); api.getStatePool.mockResolvedValue(data()); api.refreshState.mockResolvedValue(undefined); api.getStateValue.mockResolvedValue('t'.repeat(332)); api.copy.mockResolvedValue(true); api.getStateEvents.mockResolvedValue([]); api.importState.mockResolvedValue({ id: 'import-1', account_id: 1, model: 'gpt-6-astra', status: 'queued', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }); api.getImportJob.mockResolvedValue({ id: 'import-1', account_id: 1, model: 'gpt-6-astra', status: 'succeeded', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }) })
 afterEach(() => { wrapper?.unmount() })
 describe('Codex state pool', () => {
   it('defaults to astra and keeps a valid candidate healthy after failed renewal', async () => {

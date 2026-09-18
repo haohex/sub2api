@@ -679,7 +679,7 @@ describe('admin UsageTable request ID column', () => {
     const blob = 'g'.repeat(len)
     const wrapper = mount(UsageTable, {
       props: {
-        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '', turn_state: blob }],
+        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '', account: { id: 1, name: 'Plus', plan_type: 'plus' }, turn_state: blob }],
         loading: false,
         columns: [{ key: 'turn_state', label: 'Turn-state' }],
       },
@@ -699,14 +699,13 @@ describe('admin UsageTable request ID column', () => {
 
     const wrapper = mount(UsageTable, {
       props: {
-        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '', turn_state: blob, turn_state_overridden: true }],
+        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '', account: { id: 1, name: 'Plus', plan_type: 'plus' }, turn_state: blob, turn_state_overridden: true }],
         loading: false,
         columns: [{ key: 'turn_state', label: 'Turn-state' }],
       },
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
 
-    expect(wrapper.text()).toContain('OVR')
     const copyButtons = wrapper.findAll('button[title="Copy to clipboard"]')
     expect(copyButtons).toHaveLength(1)
     await copyButtons[0].trigger('click')

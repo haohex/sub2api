@@ -168,6 +168,17 @@ const codexWSTestFrame = `{"client_metadata":{"session_id":"S"},"type":"response
 // 第二帧：顶层乱序、自带 turn-state 与时间戳（真客户端后续轮次的形态）。
 const codexWSSecondFrame = `{"input":[{"type":"message","role":"user","content":"hi 2"}],"client_metadata":{"session_id":"S","x-codex-turn-state":"own-2","x-codex-ws-stream-request-start-ms":"123456"},"stream":false,"model":"gpt-5.5","type":"response.create"}`
 
+func TestManagedCodexWSFrameNeverForwardsBadClientState(t *testing.T) {
+	account := codexTurnStateTestAccount()
+	account.Extra[CodexTurnStateProbeEnabledExtraKey] = true
+	delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	payload := []byte(`{"type":"response.create","model":"gpt-5.4","client_metadata":{"x-codex-turn-state":"` + strings.Repeat("x", 356) + `"}}`)
+	out := applyCodexWSFrameWireProfile(c, account, payload, "", "review-token")
+	require.Empty(t, gjson.GetBytes(out, "client_metadata.x-codex-turn-state").String())
+}
+
 // requireCodexWSStreamRequestStart 断言帧带 x-codex-ws-stream-request-start-ms：want 为空时
 // 要求是网关在发送前盖的 unix 毫秒（十进制字符串，落在测试时间窗内），否则必须原样等于 want。
 func requireCodexWSStreamRequestStart(t *testing.T, frame []byte, want string) {

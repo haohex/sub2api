@@ -58,6 +58,14 @@ export async function getStateEvents(row: StatePoolRow, before = 0): Promise<Sta
   const { data } = await apiClient.get<{items: StateEvent[]}>(`/admin/accounts/${row.account_id}/codex-turn-state-probe/events`, { params: { model: row.model, before } })
   return data.items
 }
-export async function importState(row: StatePoolRow, state: string): Promise<void> {
-  await apiClient.post(`/admin/accounts/${row.account_id}/codex-turn-state-probe/import`, { model: row.model, state }, { timeout: 30000 })
+export interface StateImportJob {
+  id: string; account_id: number; model: string; status: 'queued' | 'running' | 'succeeded' | 'failed'; reason?: string; created_at: string; updated_at: string
+}
+export async function importState(row: StatePoolRow, state: string): Promise<StateImportJob> {
+  const { data } = await apiClient.post<StateImportJob>(`/admin/accounts/${row.account_id}/codex-turn-state-probe/import`, { model: row.model, state }, { timeout: 10000 })
+  return data
+}
+export async function getImportJob(row: StatePoolRow, jobId: string): Promise<StateImportJob> {
+  const { data } = await apiClient.get<StateImportJob>(`/admin/accounts/${row.account_id}/codex-turn-state-probe/import/${encodeURIComponent(jobId)}`)
+  return data
 }

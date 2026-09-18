@@ -402,6 +402,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/:id/schedulable", h.Admin.Account.SetSchedulable)
 		accounts.POST("/:id/codex-turn-state-probe/retry", h.Admin.Account.RetryCodexTurnStateProbe)
 		accounts.POST("/:id/codex-turn-state-probe/import", h.Admin.Account.ImportCodexState)
+		accounts.GET("/:id/codex-turn-state-probe/import/:job_id", h.Admin.Account.GetCodexStateImportJob)
 		accounts.GET("/:id/codex-turn-state-probe/events", h.Admin.Account.GetCodexStateEvents)
 		accounts.GET("/codex-state-pool", h.Admin.Account.GetCodexStatePool)
 		accounts.PUT("/codex-state-pool/config", h.Admin.Account.SetCodexStateGlobalProxy)

@@ -380,15 +380,23 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		// Keep the image cache split in the existing usage_logs JSONB payload.
 		imageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
 	}
+	var turnStateExpectedLength *int
+	if account.TargetsChatGPTCodexUpstream() {
+		if expected := CodexTurnStateHealthyLength(account); expected > 0 {
+			turnStateExpectedLength = &expected
+		}
+	}
 	usageLog := &UsageLog{
 		UserID:                   user.ID,
 		APIKeyID:                 apiKey.ID,
 		AccountID:                account.ID,
 		RequestID:                requestID,
 		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, result.OpenAIWSMode),
+		TurnStateSent:            input.StateLengths.SentState,
 		TurnState:                usageCodexTurnStatePtr(result.UpstreamHeaders),
 		TurnStateSentLength:      input.StateLengths.Sent,
 		TurnStateReturnedLength:  input.StateLengths.Returned,
+		TurnStateExpectedLength:  turnStateExpectedLength,
 		TurnStateOverridden:      usageCodexTurnStateOverriddenPtr(account, input.TurnStateSource),
 		TurnStateSource:          usageCodexTurnStateSourcePtr(account, input.TurnStateSource),
 		Model:                    result.Model,

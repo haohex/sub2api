@@ -117,13 +117,35 @@ func (h *AccountHandler) ImportCodexState(c *gin.Context) {
 		response.BadRequest(c, "invalid state input")
 		return
 	}
-	result, err := h.codexTurnStateProbe.ImportState(c.Request.Context(), id, strings.TrimSpace(input.Model), input.State)
+	job, err := h.codexTurnStateProbe.QueueImportState(c.Request.Context(), id, strings.TrimSpace(input.Model), input.State)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	response.Success(c, gin.H{"result": result})
+	response.Success(c, job)
+}
+
+func (h *AccountHandler) GetCodexStateImportJob(c *gin.Context) {
+	if !h.codexStateServiceReady(c) {
+		return
+	}
+	accountID, ok := codexStateRequestAccountID(c)
+	if !ok {
+		return
+	}
+	jobID := strings.TrimSpace(c.Param("job_id"))
+	if jobID == "" {
+		response.BadRequest(c, "job_id is required")
+		return
+	}
+	job, ok := h.codexTurnStateProbe.ImportJob(jobID)
+	if !ok || job.AccountID != accountID {
+		response.NotFound(c, "import job not found")
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, job)
 }
 func (h *AccountHandler) GetCodexStateEvents(c *gin.Context) {
 	if !h.codexStateServiceReady(c) {

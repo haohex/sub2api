@@ -683,14 +683,16 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 }
 
 // AccountSummaryFromService returns a minimal AccountSummary for usage log display.
-// Only includes ID and Name - no sensitive fields like Credentials, Proxy, etc.
+// It includes the non-sensitive plan type used to classify turn-state lengths,
+// but never exposes Credentials, Proxy, or other account secrets.
 func AccountSummaryFromService(a *service.Account) *AccountSummary {
 	if a == nil {
 		return nil
 	}
 	return &AccountSummary{
-		ID:   a.ID,
-		Name: a.Name,
+		ID:       a.ID,
+		Name:     a.Name,
+		PlanType: a.GetCredential("plan_type"),
 	}
 }
 
@@ -786,9 +788,11 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
+		TurnStateSent:           l.TurnStateSent,
 		TurnState:               l.TurnState,
 		TurnStateSentLength:     l.TurnStateSentLength,
 		TurnStateReturnedLength: l.TurnStateReturnedLength,
+		TurnStateExpectedLength: l.TurnStateExpectedLength,
 		TurnStateOverridden:     l.TurnStateOverridden,
 		TurnStateSource:         l.TurnStateSource,
 		BillingTier:             l.BillingTier,

@@ -108,21 +108,21 @@ func TestCodexStateImportRejectsBusyMalformedAndOlder(t *testing.T) {
 	require.False(t, saved)
 	require.Equal(t, "not_newer", reason)
 }
-func TestCodexStateContinuousAttemptsNeverExhaust(t *testing.T) {
+func TestCodexStateContinuousAttemptsCoolDownWhenNoCandidateExists(t *testing.T) {
 	svc, a, repo := productionStateService()
 	defer svc.Stop()
 	delete(a.Extra, CodexTurnStateProbeCacheExtraKey)
 	key := codexTurnStatePoolKey{a.ID, "gpt-5.4"}
-	svc.schedules = map[codexTurnStatePoolKey]*codexStateSchedule{key: {Mode: "continuous"}}
+	svc.schedules = map[codexTurnStatePoolKey]*codexStateSchedule{key: {Mode: "continuous", NoValid: true, Remaining: 25}}
 	calls := 0
 	svc.requestDo = func(*http.Request, string) (*http.Response, error) { calls++; return nil, errors.New("offline") }
-	for range 27 {
+	for range 25 {
 		svc.executeStateAttempt(context.Background(), a.ID, "gpt-5.4")
 	}
-	require.Equal(t, 27, calls)
-	require.Equal(t, 27, svc.schedules[key].Attempt)
-	require.WithinDuration(t, time.Now().Add(time.Second), svc.schedules[key].Next, time.Second)
-	require.Len(t, repo.events, 54)
+	require.Equal(t, 25, calls)
+	require.Equal(t, 0, svc.schedules[key].Attempt)
+	require.WithinDuration(t, time.Now().Add(5*time.Minute), svc.schedules[key].Next, time.Second)
+	require.Len(t, repo.events, 50)
 	svc.schedules[key] = &codexStateSchedule{Mode: "periodic", Remaining: 25}
 	for range 25 {
 		svc.executeStateAttempt(context.Background(), a.ID, "gpt-5.4")
