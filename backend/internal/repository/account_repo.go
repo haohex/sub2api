@@ -64,12 +64,14 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_usage_updated_at":                   {},
-	"grok_billing_snapshot":                    {},
-	"session_window_utilization":               {},
-	service.CodexTurnStateProbeCacheExtraKey:   {},
-	service.CodexTurnStateProbeFailureExtraKey: {},
-	"openai_turn_state_pool":                   {},
+	"codex_usage_updated_at":           {},
+	"grok_billing_snapshot":            {},
+	"session_window_utilization":       {},
+	"openai_turn_state_pool":           {},
+	"openai_turn_state_observed":       {},
+	"cpr_outbound_proxy":               {},
+	"openai_turn_state_hunt":           {},
+	"openai_turn_state_recovery_state": {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -781,9 +783,6 @@ func lockAndMergeAccountProbeExtra(
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := preserveCodexTurnStateProbeRuntime(ctx, client, account, extra); err != nil {
-		return nil, err
-	}
 	return extra, nil
 }
 
@@ -1220,11 +1219,12 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
 	// 健康账号：temp_unschedulable_until=NULL）也排除，导致后台 token
 	// 刷新工作器漏掉所有正常账号 → access_token 到期后请求开始 401。
+	// 暂停账号仍保留有效 refresh token，不能因为 schedulable=false 而停止刷新；
+	// 否则管理端 usage-window probe 会把已过期 access_token 误报成需要重新授权。
 	query := `
 		SELECT id
 		FROM accounts
 		WHERE deleted_at IS NULL
-			AND schedulable = TRUE
 			AND platform = ANY($1)
 			AND id > $2`
 	if options.ActiveOnly {
@@ -2654,10 +2654,6 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
-	cacheUpdate, hasCacheUpdate := updates[service.CodexTurnStateProbeCacheExtraKey]
-	clearCodexTurnStateCache := hasCacheUpdate && cacheUpdate == nil
-	failureUpdate, hasFailureUpdate := updates[service.CodexTurnStateProbeFailureExtraKey]
-	clearCodexTurnStateFailures := hasFailureUpdate && failureUpdate == nil
 	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -2678,12 +2674,6 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
 	if clearProbeSnapshot {
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
-	}
-	if clearCodexTurnStateCache {
-		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeCacheExtraKey + "'"
-	}
-	if clearCodexTurnStateFailures {
-		extraExpression = "(" + extraExpression + ") - '" + service.CodexTurnStateProbeFailureExtraKey + "'"
 	}
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)

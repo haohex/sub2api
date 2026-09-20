@@ -292,33 +292,64 @@
         </template>
 
         <template #cell-turn_state="{ row }">
-          <div v-if="row.turn_state || row.turn_state_sent || row.turn_state_sent_length != null || row.turn_state_returned_length != null" class="flex max-w-[220px] items-center gap-1.5">
+          <div v-if="row.turn_state" class="flex max-w-[220px] items-center gap-1.5">
+            <!-- 显示字符数（292 = 不降智）；判定仍按密文块数，块数只把明文框进 16 字节的窗口，是疑似不是确证 -->
             <span
               class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
-              :class="turnStateTone(row) === 'normal'
-                ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                : turnStateTone(row) === 'abnormal'
-                  ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
-                  : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
-              :title="turnStateToneTitle(row)"
+              :class="turnStateBadgeClass(row.turn_state)"
+              :title="turnStateTitle(row.turn_state)"
             >
-              {{ turnStateDisplayLength(row) ?? '—' }}
+              {{ turnStateBadgeText(row.turn_state) }}
             </span>
-            <span v-if="turnStateValue(row)" class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="turnStateValue(row) || undefined">
-              {{ turnStateValue(row)!.slice(0, 24) }}{{ turnStateValue(row)!.length > 24 ? '…' : '' }}
+            <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.turn_state">
+              {{ row.turn_state }}
             </span>
             <button
               type="button"
               class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
-              :class="copiedRequestId === turnStateValue(row) ? 'text-green-500 hover:text-green-500' : ''"
-              :title="copiedRequestId === turnStateValue(row) ? t('keys.copied') : t('keys.copyToClipboard')"
-              v-if="turnStateValue(row)"
-              @click="copyTurnState(turnStateValue(row)!)"
+              :class="copiedRequestId === row.turn_state ? 'text-green-500 hover:text-green-500' : ''"
+              :title="copiedRequestId === row.turn_state ? t('keys.copied') : t('keys.copyToClipboard')"
+              @click="copyTurnState(row.turn_state)"
             >
-              <Icon :name="copiedRequestId === turnStateValue(row) ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+              <Icon :name="copiedRequestId === row.turn_state ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
             </button>
           </div>
-          <span v-else class="text-sm text-gray-400 dark:text-gray-500">—</span>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-turn_state_sent="{ row }">
+          <div v-if="row.turn_state_sent" class="flex max-w-[220px] items-center gap-1.5">
+            <span
+              class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
+              :class="turnStateBadgeClass(row.turn_state_sent)"
+              :title="turnStateTitle(row.turn_state_sent)"
+            >
+              {{ turnStateBadgeText(row.turn_state_sent) }}
+            </span>
+            <!-- 覆写来源说的是「出站这张票从哪来」，所以贴在出站列。贴在铸出列时，
+                 「注入 292 后上游仍铸 312」这一行会显示成「312 手填」，读起来像手填的
+                 就是 312。 -->
+            <span
+              v-if="row.turn_state_overridden"
+              class="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+              :title="turnStateSourceTitle(row.turn_state_source)"
+            >
+              {{ turnStateSourceBadge(row.turn_state_source) }}
+            </span>
+            <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.turn_state_sent">
+              {{ row.turn_state_sent }}
+            </span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+              :class="copiedRequestId === row.turn_state_sent ? 'text-green-500 hover:text-green-500' : ''"
+              :title="copiedRequestId === row.turn_state_sent ? t('keys.copied') : t('keys.copyToClipboard')"
+              @click="copyTurnState(row.turn_state_sent)"
+            >
+              <Icon :name="copiedRequestId === row.turn_state_sent ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
         <template #cell-user_agent="{ row }">
@@ -562,6 +593,7 @@
 </template>
 
 <script setup lang="ts">
+import { decodeTurnState, isTurnStateHealthy } from '@/utils/turnState'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -721,50 +753,42 @@ const copyUpstreamRequestId = (upstreamRequestId: string) =>
 const copyTurnState = (turnState: string) =>
   copyIdentifier(turnState, t('admin.usage.turnStateCopied'))
 
-const normalizeTurnStatePlan = (value?: string | null): string =>
-  (value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+// 徽章直接显示字符长度：292 / 312 是运维实际在说的那两个数，比「10 块 / 11 块」直观，
+// 而且一一对应（每块 16 字节 → 差一块正好差 20 个 base64 字符），不损失信息。
+// 健康判定仍走密文块数（isTurnStateHealthy），那才是真判据。
+const turnStateBadgeText = (blob: string) => String(blob.length)
 
-const expectedTurnStateLength = (row: AdminUsageLog): number | null => {
-  if (row.turn_state_expected_length && row.turn_state_expected_length > 0) return row.turn_state_expected_length
-  switch (normalizeTurnStatePlan(row.account?.plan_type)) {
-    case 'plus':
-    case 'pro':
-    case 'chatgptpro':
-    case 'prolite':
-    case 'pro5x':
-    case 'pro20x':
-      return 292
-    case 'team':
-      return 332
-    default:
-      return null
-  }
-}
+// 覆写来源徽标：后端存的是 manual/auto/auto_stale 枚举，直接渲染就是一串英文。
+// 白名单而不是直接拼 key：拼 key 遇到没见过的取值会把原始 key 显示出来，
+// 比显示一个中性的「覆写」更糟。历史行没有 source 列（overridden 为 true 但
+// source 为 NULL），同样兜底成「覆写」。
+const TURN_STATE_SOURCES = ['manual', 'auto', 'auto_stale'] as const
 
-const turnStateValue = (row: AdminUsageLog): string | null => row.turn_state || row.turn_state_sent || null
+const turnStateSourceBadge = (source?: string | null) =>
+  source && (TURN_STATE_SOURCES as readonly string[]).includes(source)
+    ? t(`admin.usage.turnStateSourceShort.${source}`)
+    : t('admin.usage.turnStateOverriddenShort')
 
-const turnStateDisplayLength = (row: AdminUsageLog): number | null => {
-  if (row.turn_state_returned_length != null && row.turn_state_returned_length > 0) return row.turn_state_returned_length
-  if (row.turn_state_sent_length != null && row.turn_state_sent_length > 0) return row.turn_state_sent_length
-  return turnStateValue(row)?.length ?? null
-}
+const turnStateSourceTitle = (source?: string | null) =>
+  source && (TURN_STATE_SOURCES as readonly string[]).includes(source)
+    ? t(`admin.usage.turnStateSourceLong.${source}`)
+    : t('admin.usage.turnStateOverridden')
 
-const turnStateTone = (row: AdminUsageLog): 'normal' | 'abnormal' | 'unknown' => {
-  const length = turnStateDisplayLength(row)
-  const expected = expectedTurnStateLength(row)
-  if (length == null || expected == null) return 'unknown'
-  return length === expected ? 'normal' : 'abnormal'
-}
+const turnStateBadgeClass = (blob: string) =>
+  isTurnStateHealthy(blob)
+    ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+    : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
 
-const turnStateToneTitle = (row: AdminUsageLog): string => {
-  const expected = expectedTurnStateLength(row)
-  const tone = expected == null
-    ? t('admin.accounts.statePool.unknownPlan')
-    : turnStateTone(row) === 'normal'
-    ? t('admin.accounts.statePool.valid', { length: expected })
-    : t('admin.accounts.statePool.abnormalLength')
-  const source = row.turn_state ? t('admin.accounts.statePool.returned') : row.turn_state_sent ? t('admin.accounts.statePool.sent') : t('admin.accounts.statePool.notRecorded')
-  return `${tone} · ${source}`
+const turnStateTitle = (blob: string) => {
+  const env = decodeTurnState(blob)
+  if (!env) return t('admin.usage.turnStateUndecodable', { n: blob.length })
+  return t('admin.usage.turnStateHint', {
+    blocks: env.blocks,
+    chars: blob.length,
+    min: env.blocks * 16 - 16,
+    max: env.blocks * 16 - 1,
+    minted: formatDateTime(env.mintedAt),
+  })
 }
 
 // Tooltip state - cost
@@ -780,6 +804,7 @@ const tokenTooltipData = ref<AdminUsageLog | null>(null)
 const getRequestTypeLabel = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
   if (requestType === 'cyber') return t('usage.cyber')
+  if (requestType === 'probe') return t('usage.probe')
   if (requestType === 'live') return t('usage.live')
   if (requestType === 'ws_v2') return t('usage.ws')
   if (requestType === 'stream') return t('usage.stream')
@@ -790,6 +815,7 @@ const getRequestTypeLabel = (row: AdminUsageLog): string => {
 const getRequestTypeBadgeClass = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
   if (requestType === 'cyber') return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+  if (requestType === 'probe') return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
   if (requestType === 'live') return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
   if (requestType === 'ws_v2') return 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200'
   if (requestType === 'stream') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'

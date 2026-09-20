@@ -436,8 +436,7 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 		switch key {
 		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
-			service.OllamaCloudUsageSnapshotExtraKey,
-			service.CodexTurnStateProbeCacheExtraKey:
+			service.OllamaCloudUsageSnapshotExtraKey:
 			continue
 		default:
 			redacted[key] = value
@@ -788,13 +787,10 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
-		TurnStateSent:           l.TurnStateSent,
 		TurnState:               l.TurnState,
-		TurnStateSentLength:     l.TurnStateSentLength,
-		TurnStateReturnedLength: l.TurnStateReturnedLength,
-		TurnStateExpectedLength: l.TurnStateExpectedLength,
 		TurnStateOverridden:     l.TurnStateOverridden,
 		TurnStateSource:         l.TurnStateSource,
+		TurnStateSent:           l.TurnStateSent,
 		BillingTier:             l.BillingTier,
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,

@@ -196,8 +196,7 @@ func applyCodexDeviceWireProfile(c *gin.Context, account *Account, headers http.
 	if websocket {
 		// 真客户端的 WS 握手显式传 turn_state=None（core/src/client.rs:1241），turn-state
 		// 只走每一帧的 client_metadata["x-codex-turn-state"]（client.rs:1793）。握手上删掉；
-		// 帧内由 applyCodexWSFrameWireProfile 填入；普通客户端值按协议保留，
-		// 命中账号级候选时由候选覆盖为本账号/本模型的 state。
+		// 帧内由 applyCodexWSFrameWireProfile 按"缺失才补"填入，真客户端自带的不覆盖。
 		headers.Del(openAICodexTurnStateHeader)
 	}
 }

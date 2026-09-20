@@ -1782,6 +1782,16 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
+	// 模型级限流（spark 429、降智暂停）也要在主过滤就排掉：否则停着的账号挤占 TopK 名额，
+	// 到 fresh/DB 复核才被拒，候选多于 TopK 时健康账号轮不到——与下面 quota auto-pause 同一个坑。
+	if req.RequestedModel != "" {
+		if limited, held := account.modelRateLimitStateForRequest(ctx, req.RequestedModel, time.Now()); limited {
+			if held {
+				return false, openAITurnStateHoldLimitReason
+			}
+			return false, "model_rate_limited"
+		}
+	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
 		return false, "proxy_stream_quarantined"
 	}
@@ -2102,7 +2112,7 @@ func (s *OpenAIGatewayService) SelectAccountWithScheduler(
 	requiredTransport OpenAIUpstreamTransport,
 	requireCompact bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	return s.selectAccountWithHealthyCodexState(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, "", requireCompact, PlatformOpenAI, false, true)
+	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, "", "", requireCompact, PlatformOpenAI, false, true)
 }
 
 // SelectAccountWithSchedulerForCapability 按能力要求调度账号。
@@ -2126,59 +2136,7 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
 	}
-	return s.selectAccountWithHealthyCodexState(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
-}
-
-// selectAccountWithHealthyCodexState prevents a probe-managed account from
-// reaching a business transport without the account/model candidate that was
-// validated for its subscription. The scheduler may pick another eligible
-// account; if none has a healthy candidate the normal no-account path produces
-// the gateway's 503 response instead of sending a client-echoed bad state.
-func (s *OpenAIGatewayService) selectAccountWithHealthyCodexState(
-	ctx context.Context,
-	groupID *int64,
-	previousResponseID, sessionHash, requestedModel string,
-	excludedIDs map[int64]struct{}, requiredTransport OpenAIUpstreamTransport,
-	requiredCapability OpenAIEndpointCapability, requireCompact bool,
-	platform string, previousResponseCanMove, useUpstreamTokenCost bool,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	if NormalizeOpenAICompatiblePlatform(platform) != PlatformOpenAI || strings.TrimSpace(requestedModel) == "" {
-		return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
-	}
-	// Turn-state is a Responses/Chat Completions Codex concern. Embeddings,
-	// alpha search and live/media capability selection do not send the managed
-	// Responses turn-state carrier, so they must retain the normal scheduler.
-	switch requiredCapability {
-	case OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityAlphaSearch, OpenAIEndpointCapabilityLive, OpenAIEndpointCapabilityGrokMediaGeneration:
-		return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
-	}
-	localExcluded := make(map[int64]struct{}, len(excludedIDs)+4)
-	for id := range excludedIDs {
-		localExcluded[id] = struct{}{}
-	}
-	filteredManagedAccount := false
-	for range 64 {
-		selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, localExcluded, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
-		if err != nil {
-			if filteredManagedAccount && (errors.Is(err, ErrNoAvailableAccounts) || errors.Is(err, ErrNoAvailableCompactAccounts)) {
-				return nil, decision, fmt.Errorf("%w: high_compute_state_unavailable", ErrNoAvailableAccounts)
-			}
-			return selection, decision, err
-		}
-		if selection == nil || selection.Account == nil {
-			return selection, decision, err
-		}
-		account := selection.Account
-		if !codexTurnStateProbeEnabled(account) || !account.TargetsChatGPTCodexUpstream() || configuredCodexTurnState(account, requestedModel, account.GetOpenAIAccessToken(), time.Now()) != "" {
-			return selection, decision, nil
-		}
-		if selection.ReleaseFunc != nil {
-			selection.ReleaseFunc()
-		}
-		filteredManagedAccount = true
-		localExcluded[account.ID] = struct{}{}
-	}
-	return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("%w: high_compute_state_unavailable", ErrNoAvailableAccounts)
+	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(

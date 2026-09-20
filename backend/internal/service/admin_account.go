@@ -152,10 +152,6 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_7d_reset_after_seconds":         {},
 	"codex_7d_window_minutes":              {},
 	"codex_7d_reset_at":                    {},
-	CodexTurnStateProbeFailureExtraKey:     {},
-	CodexTurnStateProbeRetryExtraKey:       {},
-	CodexTurnStateProbeModelsExtraKey:      {},
-	CodexTurnStateProbeCacheExtraKey:       {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -424,10 +420,6 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
-	delete(accountExtra, CodexTurnStateProbeFailureExtraKey)
-	delete(accountExtra, CodexTurnStateProbeRetryExtraKey)
-	delete(accountExtra, CodexTurnStateProbeModelsExtraKey)
-	delete(accountExtra, CodexTurnStateProbeCacheExtraKey)
 	accountExtra = prepareCodexFingerprintExtraForCreate(input.Platform, input.Type, accountExtra)
 	account := &Account{
 		Name:        input.Name,
@@ -499,10 +491,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	if _, err := NormalizeCodexTurnStateProbeExtra(input.Platform, input.Type, accountExtra); err != nil {
-		return nil, infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE", err.Error())
-	}
-
 	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
 		return nil, err
 	}
@@ -510,6 +498,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 	if err := ValidateOpenAITurnStateAutoExtra(accountExtra); err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAITurnStateHunterExtra(accountExtra); err != nil {
 		return nil, err
 	}
 
@@ -597,19 +588,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	previousCodexTurnStateConfig, previousCodexTurnStateConfigErr := CodexTurnStateProbeConfigFromExtra(account.Extra)
-	previousCodexTurnStateAccountType := account.Type
-	previousCodexTurnStateOwner := codexTurnStateOwnerIdentity(account)
-	requestedCodexTurnStateProbeRetry := false
-	if input.Extra != nil {
-		if rawRetry, ok := input.Extra[CodexTurnStateProbeRetryExtraKey]; ok {
-			retry, retryOK := rawRetry.(bool)
-			if !retryOK {
-				return nil, infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE_RETRY", CodexTurnStateProbeRetryExtraKey+" must be a boolean")
-			}
-			requestedCodexTurnStateProbeRetry = retry
-		}
-	}
 	// Platform 在更新路径不可变，只需用生效后的 type 复核平台×类型组合。
 	if input.Type != "" {
 		if err := validateCPRAccountShape(account.Platform, input.Type); err != nil {
@@ -641,6 +619,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		if err := ValidateOpenAITurnStateAutoExtra(normalizedExtra); err != nil {
+			return nil, err
+		}
+		if err := ValidateOpenAITurnStateHunterExtra(normalizedExtra); err != nil {
 			return nil, err
 		}
 	}
@@ -722,16 +703,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSessionExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
-		// The raw Codex turn-state cache is server-managed and is never accepted
-		// from an ordinary account edit payload. Preserve the existing cache below
-		// so unrelated edits do not silently erase it.
-		delete(normalizedExtra, CodexTurnStateProbeFailureExtraKey)
-		delete(normalizedExtra, CodexTurnStateProbeRetryExtraKey)
-		delete(normalizedExtra, CodexTurnStateProbeModelsExtraKey)
-		delete(normalizedExtra, CodexTurnStateProbeCacheExtraKey)
 		// turn-state 候选池由网关在响应路径上维护（含 Failed 标记）。管理端提交的
 		// extra 是打开弹窗那一刻的快照，不剔掉就会把失效候选复活、甚至整池清空。
 		delete(normalizedExtra, openAITurnStatePoolExtraKey)
+		// 猎手运行态同理：小时计数、退避、出口冷却都在网关侧维护，快照回写会把它们全部倒回。
+		delete(normalizedExtra, openAITurnStateHuntExtraKey)
+		// 形态观测也是网关写的运行态：快照回写会把「最近铸出」倒回打开弹窗那一刻。
+		delete(normalizedExtra, openAITurnStateObservedExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -747,9 +725,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OllamaCloudUsageAutoRefreshExtraKey,
 			OllamaCloudUsageSnapshotExtraKey,
 			OpenAIAutoResetCreditStateExtraKey,
-			CodexTurnStateProbeFailureExtraKey,
-			CodexTurnStateProbeCacheExtraKey,
 			openAITurnStatePoolExtraKey,
+			openAITurnStateHuntExtraKey,
+			openAITurnStateObservedExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
@@ -778,49 +756,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Extra == nil {
 		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
 	}
-	if input.Extra != nil {
-		if _, err := NormalizeCodexTurnStateProbeExtra(account.Platform, account.Type, account.Extra); err != nil {
-			return nil, infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE", err.Error())
-		}
-
-	}
-	if requestedCodexTurnStateProbeRetry {
-		if !IsCodexTurnStateProbeAccount(account) {
-			return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_INELIGIBLE", "account is not eligible for Codex turn-state probing")
-		}
-		probeConfig, configErr := CodexTurnStateProbeConfigFromExtra(account.Extra)
-		if configErr != nil || !probeConfig.Enabled {
-			return nil, infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_DISABLED", "Codex turn-state probing must be enabled before retrying")
-		}
-	}
-	// Feature configuration changes, credential-owner changes, and type changes all
-	// invalidate candidates. The cache itself is retained only for unrelated
-	// account edits and is always checked again against model/proxy/token data
-	// on the request path.
-	currentCodexTurnStateConfig, currentCodexTurnStateConfigErr := CodexTurnStateProbeConfigFromExtra(account.Extra)
-	if !IsCodexTurnStateProbeAccount(account) {
-		delete(account.Extra, CodexTurnStateProbeEnabledExtraKey)
-		delete(account.Extra, CodexTurnStateProbeProxyIDExtraKey)
-		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		delete(account.Extra, CodexTurnStateProbeRetryExtraKey)
-		delete(account.Extra, CodexTurnStateProbeModelsExtraKey)
-		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	} else if currentCodexTurnStateConfigErr != nil || !currentCodexTurnStateConfig.Enabled {
-		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	} else if input.Type != "" && input.Type != previousCodexTurnStateAccountType {
-		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	} else if input.Extra != nil && (previousCodexTurnStateConfigErr != nil ||
-		!reflect.DeepEqual(previousCodexTurnStateConfig, currentCodexTurnStateConfig)) {
-		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	} else if codexTurnStateOwnerIdentity(account) != previousCodexTurnStateOwner {
-		delete(account.Extra, CodexTurnStateProbeFailureExtraKey)
-		delete(account.Extra, CodexTurnStateProbeCacheExtraKey)
-	}
-	delete(account.Extra, CodexTurnStateProbeRetryExtraKey)
-	delete(account.Extra, CodexTurnStateProbeModelsExtraKey)
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {
 		if requestedProbeEnabledUpdate != nil && !*requestedProbeEnabledUpdate {
 			return nil, infraerrors.BadRequest(
@@ -995,12 +930,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
-	if requestedCodexTurnStateProbeRetry {
-		if err := retryCodexTurnStateProbe(ctx, s.accountRepo, id); err != nil {
-			return nil, err
-		}
-	}
-
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
@@ -1012,26 +941,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
-	if rawRetry, exists := updates[CodexTurnStateProbeRetryExtraKey]; exists {
-		retry, ok := rawRetry.(bool)
-		if !ok {
-			return infraerrors.BadRequest("INVALID_CODEX_TURN_STATE_PROBE_RETRY", CodexTurnStateProbeRetryExtraKey+" must be a boolean")
-		}
-		if retry {
-			account, err := s.accountRepo.GetByID(ctx, id)
-			if err != nil {
-				return err
-			}
-			if !IsCodexTurnStateProbeAccount(account) {
-				return infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_INELIGIBLE", "account is not eligible for Codex turn-state probing")
-			}
-			config, configErr := CodexTurnStateProbeConfigFromExtra(account.Extra)
-			if configErr != nil || !config.Enabled {
-				return infraerrors.BadRequest("CODEX_TURN_STATE_PROBE_RETRY_DISABLED", "Codex turn-state probing must be enabled before retrying")
-			}
-			return retryCodexTurnStateProbe(ctx, s.accountRepo, id)
-		}
-	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -1040,10 +949,11 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
-	delete(updates, CodexTurnStateProbeFailureExtraKey)
-	delete(updates, CodexTurnStateProbeRetryExtraKey)
-	delete(updates, CodexTurnStateProbeModelsExtraKey)
-	delete(updates, CodexTurnStateProbeCacheExtraKey)
+	// turn-state 运行态只由网关/猎手维护，与 UpdateAccount 同一份剔除名单：
+	// 不剔的话一次重授权就能把别的账号的候选池写进来（跨凭证域回放）。
+	delete(updates, openAITurnStatePoolExtraKey)
+	delete(updates, openAITurnStateHuntExtraKey)
+	delete(updates, openAITurnStateObservedExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
@@ -1059,6 +969,29 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	return s.accountRepo.UpdateExtra(ctx, id, updates)
 }
 
+// ClearOpenAITurnStateRuntimeExtra 清掉 turn-state 的三个运行态键（写成 jsonb null，读侧按空处理）。
+// 重授权换了 ChatGPT 账号时用：旧账号铸的票对新凭据是跨凭证域回放，注进去只会换回 400，
+// 把候选池耗尽后还会把账号停掉。
+func (s *adminServiceImpl) ClearOpenAITurnStateRuntimeExtra(ctx context.Context, id int64) error {
+	return s.accountRepo.UpdateExtra(ctx, id, map[string]any{
+		openAITurnStatePoolExtraKey:     nil,
+		openAITurnStateHuntExtraKey:     nil,
+		openAITurnStateObservedExtraKey: nil,
+	})
+}
+
+// OpenAITurnStateIdentityChanged 报告重授权是否换了 ChatGPT 账号：按 credentials 里的
+// chatgpt_account_id 比，旧值缺失也算换了（看不出是谁就宁可清池）。非 Codex 上游不关心。
+func OpenAITurnStateIdentityChanged(existing *Account, credentials map[string]any) bool {
+	if existing == nil || !existing.TargetsChatGPTCodexUpstream() {
+		return false
+	}
+	old, _ := existing.Credentials["chatgpt_account_id"].(string)
+	next, _ := credentials["chatgpt_account_id"].(string)
+	old, next = strings.TrimSpace(old), strings.TrimSpace(next)
+	return old == "" || old != next
+}
+
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
@@ -1071,10 +1004,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
-	delete(input.Extra, CodexTurnStateProbeFailureExtraKey)
-	delete(input.Extra, CodexTurnStateProbeRetryExtraKey)
-	delete(input.Extra, CodexTurnStateProbeModelsExtraKey)
-	delete(input.Extra, CodexTurnStateProbeCacheExtraKey)
+	// 批量最狠：payload 里混进一份候选池会被写进每一个目标账号。
+	delete(input.Extra, openAITurnStatePoolExtraKey)
+	delete(input.Extra, openAITurnStateHuntExtraKey)
+	delete(input.Extra, openAITurnStateObservedExtraKey)
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)

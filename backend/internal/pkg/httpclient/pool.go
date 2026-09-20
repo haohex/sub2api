@@ -86,21 +86,6 @@ func GetClient(opts Options) (*http.Client, error) {
 	return client, nil
 }
 
-// NewIsolatedClient owns a transport which cannot reuse proxy tunnels.
-func NewIsolatedClient(opts Options) (*http.Client, error) {
-	transport, err := buildTransport(opts)
-	if err != nil {
-		return nil, err
-	}
-	transport.DisableKeepAlives = true
-	transport.ForceAttemptHTTP2 = false
-	var rt http.RoundTripper = transport
-	if opts.ValidateResolvedIP && !opts.AllowPrivateHosts {
-		rt = newValidatedTransport(transport)
-	}
-	return &http.Client{Transport: servertiming.WrapRoundTripper(rt), Timeout: opts.Timeout}, nil
-}
-
 func buildClient(opts Options) (*http.Client, error) {
 	transport, err := buildTransport(opts)
 	if err != nil {

@@ -130,10 +130,8 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
 	// 尾部顺序：upstream_request_id, session_id, native_compaction_v2,
-	// turn_state, turn_state_overridden, turn_state_source, created_at,
-	// turn_state_sent_length, turn_state_returned_length, turn_state_sent,
-	// turn_state_expected_length
-	idx := len(prepared.args) - 11
+	// turn_state, turn_state_overridden, turn_state_source, turn_state_sent, created_at
+	idx := len(prepared.args) - 8
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)
@@ -148,7 +146,7 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	require.Contains(t, usageLogSelectColumns, "upstream_request_id")
 }
 
-// TestPrepareUsageLogInsert_TurnStateArgWiring 把插入参数尾部状态字段钉死。
+// TestPrepareUsageLogInsert_TurnStateArgWiring 把插入参数尾部六位全部钉死。
 //
 // 本文件顶部的契约要求新增 usage_logs 列时同步更新 4 处清单；turn_state /
 // turn_state_overridden / turn_state_source 加进来后，既有断言只钉到
@@ -156,81 +154,75 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 // （生产会在 lib/pq 那里炸——响亮失败，但正是这条契约该拦住的一类）。
 func TestPrepareUsageLogInsert_TurnStateArgWiring(t *testing.T) {
 	turnState := "gAAAAAB-turn-state-blob"
-	sentState := "gAAAAAB-sent-state-blob"
-	expectedLength := 292
 	overridden := true
 	source := "auto_stale"
+	sent := "gAAAAAB-turn-state-sent"
 	prepared := prepareUsageLogInsert(&service.UsageLog{
-		UserID:                  1,
-		APIKeyID:                2,
-		RequestID:               "client:turn-state-wiring",
-		Model:                   "gpt-5",
-		TurnState:               &turnState,
-		TurnStateSent:           &sentState,
-		TurnStateExpectedLength: &expectedLength,
-		TurnStateOverridden:     &overridden,
-		TurnStateSource:         &source,
-		CreatedAt:               time.Now().UTC(),
+		UserID:              1,
+		APIKeyID:            2,
+		RequestID:           "client:turn-state-wiring",
+		Model:               "gpt-5",
+		TurnState:           &turnState,
+		TurnStateOverridden: &overridden,
+		TurnStateSource:     &source,
+		TurnStateSent:       &sent,
+		CreatedAt:           time.Now().UTC(),
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	// 尾部顺序：... native_compaction_v2, turn_state, turn_state_overridden,
-	// turn_state_source, created_at, 两个长度、实际发送值、请求时正常长度。
 	n := len(prepared.args)
-	require.Equal(t, "boolean", usageLogInsertArgTypes[n-9], "native_compaction_v2 的位置不能漂移")
+	// 尾部顺序：... native_compaction_v2, turn_state, turn_state_overridden,
+	// turn_state_source, turn_state_sent, created_at
+	require.Equal(t, "boolean", usageLogInsertArgTypes[n-6], "native_compaction_v2 必须仍在倒数第 6")
 
-	tsArg, ok := prepared.args[n-8].(sql.NullString)
-	require.True(t, ok, "turn_state 应是 sql.NullString，实际 %T", prepared.args[n-8])
+	tsArg, ok := prepared.args[n-5].(sql.NullString)
+	require.True(t, ok, "turn_state 应是 sql.NullString，实际 %T", prepared.args[n-5])
 	require.True(t, tsArg.Valid)
 	require.Equal(t, turnState, tsArg.String)
-	require.Equal(t, "text", usageLogInsertArgTypes[n-8])
+	require.Equal(t, "text", usageLogInsertArgTypes[n-5])
 
-	ovArg, ok := prepared.args[n-7].(sql.NullBool)
-	require.True(t, ok, "turn_state_overridden 应是 sql.NullBool，实际 %T", prepared.args[n-7])
+	ovArg, ok := prepared.args[n-4].(sql.NullBool)
+	require.True(t, ok, "turn_state_overridden 应是 sql.NullBool，实际 %T", prepared.args[n-4])
 	require.True(t, ovArg.Valid)
 	require.True(t, ovArg.Bool)
-	require.Equal(t, "boolean", usageLogInsertArgTypes[n-7])
+	require.Equal(t, "boolean", usageLogInsertArgTypes[n-4])
 
-	srcArg, ok := prepared.args[n-6].(sql.NullString)
-	require.True(t, ok, "turn_state_source 应是 sql.NullString，实际 %T", prepared.args[n-6])
+	srcArg, ok := prepared.args[n-3].(sql.NullString)
+	require.True(t, ok, "turn_state_source 应是 sql.NullString，实际 %T", prepared.args[n-3])
 	require.True(t, srcArg.Valid)
 	require.Equal(t, source, srcArg.String)
-	require.Equal(t, "text", usageLogInsertArgTypes[n-6])
+	require.Equal(t, "text", usageLogInsertArgTypes[n-3])
 
-	_, ok = prepared.args[n-5].(time.Time)
-	require.True(t, ok, "created_at 类型错误，实际 %T", prepared.args[n-5])
-	require.Equal(t, "timestamptz", usageLogInsertArgTypes[n-5])
 	sentArg, ok := prepared.args[n-2].(sql.NullString)
-	require.True(t, ok)
-	require.Equal(t, sentState, sentArg.String)
-	expectedArg, ok := prepared.args[n-1].(sql.NullInt64)
-	require.True(t, ok)
-	require.Equal(t, int64(expectedLength), expectedArg.Int64)
+	require.True(t, ok, "turn_state_sent 应是 sql.NullString，实际 %T", prepared.args[n-2])
+	require.True(t, sentArg.Valid)
+	require.Equal(t, sent, sentArg.String)
+	require.Equal(t, "text", usageLogInsertArgTypes[n-2])
 
-	// 三列都未提供时必须是 NULL，而不是空串 / false
+	_, ok = prepared.args[n-1].(time.Time)
+	require.True(t, ok, "created_at 必须仍在末位，实际 %T", prepared.args[n-1])
+	require.Equal(t, "timestamptz", usageLogInsertArgTypes[n-1])
+
+	// 四列都未提供时必须是 NULL，而不是空串 / false
 	absent := prepareUsageLogInsert(&service.UsageLog{
 		UserID: 1, APIKeyID: 2, RequestID: "client:turn-state-absent", Model: "gpt-5",
 		CreatedAt: time.Now().UTC(),
 	})
-	nullTS, ok := absent.args[n-8].(sql.NullString)
+	nullTS, ok := absent.args[n-5].(sql.NullString)
 	require.True(t, ok)
 	require.False(t, nullTS.Valid, "没有 turn_state 时必须写 NULL")
-	nullOV, ok := absent.args[n-7].(sql.NullBool)
+	nullOV, ok := absent.args[n-4].(sql.NullBool)
 	require.True(t, ok)
 	require.False(t, nullOV.Valid, "不适用的账号类型必须写 NULL，而不是 false")
-	nullSrc, ok := absent.args[n-6].(sql.NullString)
+	nullSrc, ok := absent.args[n-3].(sql.NullString)
 	require.True(t, ok)
 	require.False(t, nullSrc.Valid, "没注入覆写时来源必须写 NULL")
 	nullSent, ok := absent.args[n-2].(sql.NullString)
 	require.True(t, ok)
-	require.False(t, nullSent.Valid, "没有实际发送 state 时必须写 NULL")
-	nullExpected, ok := absent.args[n-1].(sql.NullInt64)
-	require.True(t, ok)
-	require.False(t, nullExpected.Valid, "没有套餐判定时必须写 NULL")
+	require.False(t, nullSent.Valid, "没带 turn-state 时出站值必须写 NULL")
 
 	require.Contains(t, usageLogSelectColumns, "turn_state")
 	require.Contains(t, usageLogSelectColumns, "turn_state_overridden")
 	require.Contains(t, usageLogSelectColumns, "turn_state_source")
 	require.Contains(t, usageLogSelectColumns, "turn_state_sent")
-	require.Contains(t, usageLogSelectColumns, "turn_state_expected_length")
 }

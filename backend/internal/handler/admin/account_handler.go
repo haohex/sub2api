@@ -48,7 +48,6 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
-	codexTurnStateProbe     *service.CodexTurnStateProbeService
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
@@ -1021,6 +1020,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := service.ValidateOpenAITurnStateHunterExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -1163,6 +1166,10 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 	if err := service.ValidateOpenAITurnStateAutoExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := service.ValidateOpenAITurnStateHunterExtra(req.Extra); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -1633,6 +1640,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := service.ValidateOpenAITurnStateHunterExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// Drop SSO/password residue; re-auth must leave only OAuth tokens on disk.
 	req.Credentials = service.SanitizeStoredCredentials(existing.Platform, req.Credentials)
@@ -1644,6 +1655,13 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+
+	// 换了 ChatGPT 账号：旧账号铸的 turn-state 票对新凭据是跨凭证域回放，清掉运行态。
+	if service.OpenAITurnStateIdentityChanged(existing, req.Credentials) {
+		if clearErr := h.adminService.ClearOpenAITurnStateRuntimeExtra(ctx, accountID); clearErr != nil {
+			slog.Warn("apply_oauth_credentials.clear_turn_state_failed", "account_id", accountID, "err", clearErr)
+		}
 	}
 
 	// 增量合并 Extra（JSONB key 级 merge，绝不覆盖 base_rpm / window_cost_limit /
@@ -2141,6 +2159,15 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				})
 				continue
 			}
+			if err := service.ValidateOpenAITurnStateHunterExtra(item.Extra); err != nil {
+				failed++
+				results = append(results, gin.H{
+					"name":    item.Name,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
 
 			skipCheck := item.ConfirmMixedChannelRisk != nil && *item.ConfirmMixedChannelRisk
 
@@ -2344,6 +2371,10 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		return
 	}
 	if err := service.ValidateOpenAITurnStateAutoExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := service.ValidateOpenAITurnStateHunterExtra(req.Extra); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -2812,31 +2843,6 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
-}
-
-// RetryCodexTurnStateProbe clears the per-model failure budget so the
-// background probe service can start a fresh renewal cycle.
-// POST /api/v1/admin/accounts/:id/codex-turn-state-probe/retry
-func (h *AccountHandler) RetryCodexTurnStateProbe(c *gin.Context) {
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid account ID")
-		return
-	}
-
-	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, map[string]any{
-		service.CodexTurnStateProbeRetryExtraKey: true,
-	}); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
-	if err != nil {
-		response.NotFound(c, "Account not found")
-		return
-	}
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 

@@ -70,6 +70,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		codexVersionSyncSvc,
 		proxyExpirySvc,
 		subscriptionExpirySvc,
+		nil, // turnStateHunter：Stop 对 nil 安全
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
 		&service.BatchImageCleanupService{},
@@ -95,8 +96,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // ollamaCloudUsage
 		nil, // auditLog
 		nil, // openAIAutoReset
-		nil, // openAIQuotaFollowReset
-		nil, // codexTurnStateProbe
 		nil, // promptAudit
 		nil, // pluginManager
 	)

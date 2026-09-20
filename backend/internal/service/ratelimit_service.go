@@ -995,6 +995,14 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 		s.handleCNProviderConcurrencyLimit403(ctx, account)
 		return true
 	}
+	// Kimi 等 CN 供应商把 Coding Plan 配额窗口耗尽打成 403
+	// （error.type=access_terminated_error），这是窗口到期后自动恢复的限流
+	// 信号而非封禁：按 429 口径冷却到真实窗口重置点，避免落入下方通用 403
+	// 升级计数后被永久 SetError。
+	if isCNProviderQuotaExhausted403(account, responseBody, upstreamMsg) {
+		s.handleCNProviderQuotaExhausted403(ctx, account, upstreamMsg)
+		return true
+	}
 	// 国产供应商与 openai 同口径:HTML 403(CDN/代理拦截页)不构成账号失效证据,
 	// 且 403 在 failover 状态集里会被逐账号重放——直接 SetError 会让一个坏请求/
 	// 一层坏代理连环永久禁用整组账号。走 HTML 豁免 + N 次累计 + 临时冷却。
@@ -2185,8 +2193,25 @@ func hasRecoverableRuntimeState(account *Account) bool {
 	if len(account.Extra) == 0 {
 		return false
 	}
-	return hasNonEmptyMapValue(account.Extra, "model_rate_limits") ||
+	return hasActiveModelRateLimit(account) ||
 		hasNonEmptyMapValue(account.Extra, "antigravity_quota_scopes")
+}
+
+// hasActiveModelRateLimit 只认未到期的模型级限流：降智暂停（openai_turn_state_hold.go）放回或到期后
+// 条目会留在 map 里（仓储没有按 scope 删除），不能让曾被停过的账号每次定时测试成功都误判成
+// 「有状态要恢复」而白清一次、白打一行日志。解析不出 map 的形态按原来的非空判定。
+func hasActiveModelRateLimit(account *Account) bool {
+	limits, ok := account.Extra[modelRateLimitsKey].(map[string]any)
+	if !ok {
+		return hasNonEmptyMapValue(account.Extra, modelRateLimitsKey)
+	}
+	now := time.Now()
+	for scope := range limits {
+		if resetAt := account.modelRateLimitResetAt(scope); resetAt != nil && now.Before(*resetAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasNonEmptyMapValue(extra map[string]any, key string) bool {

@@ -401,6 +401,7 @@ export default {
     compactionOnly: '仅原生压缩',
     cyber: '安全策略',
     live: 'Live',
+    probe: '猎手探测',
     unknown: '未知',
     in: '输入',
     out: '输出',
@@ -788,6 +789,7 @@ export default {
     days: '天',
     codeRedeemSuccess: '兑换成功！',
     failedToRedeem: '兑换失败，请检查兑换码后重试。',
+    historyLoadFailed: '加载兑换记录失败，请重试。',
     userRefreshFailed: '兑换成功，但账户信息刷新失败。',
     subscriptionRefreshFailed: '兑换成功，但订阅状态刷新失败。',
     pleaseEnterCode: '请输入兑换码'

@@ -108,6 +108,7 @@ func provideCleanup(
 	codexVersionSync *service.OpenAICodexVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
+	turnStateHunter *service.OpenAITurnStateHunterService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	batchImageCleanup *service.BatchImageCleanupService,
@@ -133,8 +134,6 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
-	openAIQuotaFollowReset *service.OpenAIGroupQuotaFollowResetService,
-	codexTurnStateProbe *service.CodexTurnStateProbeService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
@@ -158,18 +157,6 @@ func provideCleanup(
 			{"OpenAIQuotaAutoResetService", func() error {
 				if openAIAutoReset != nil {
 					openAIAutoReset.Stop()
-				}
-				return nil
-			}},
-			{"OpenAIGroupQuotaFollowResetService", func() error {
-				if openAIQuotaFollowReset != nil {
-					openAIQuotaFollowReset.Stop()
-				}
-				return nil
-			}},
-			{"CodexTurnStateProbeService", func() error {
-				if codexTurnStateProbe != nil {
-					codexTurnStateProbe.Stop()
 				}
 				return nil
 			}},
@@ -299,6 +286,10 @@ func provideCleanup(
 			}},
 			{"SubscriptionExpiryService", func() error {
 				subscriptionExpiry.Stop()
+				return nil
+			}},
+			{"OpenAITurnStateHunterService", func() error {
+				turnStateHunter.Stop()
 				return nil
 			}},
 			{"SubscriptionService", func() error {

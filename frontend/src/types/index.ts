@@ -1467,7 +1467,7 @@ export interface CodexUsageSnapshot {
 
 export type OpenAICompactMode = 'auto' | 'force_on' | 'force_off'
 export type OpenAIResponsesMode = 'auto' | 'force_responses' | 'force_chat_completions'
-export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings'
+export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode
@@ -1696,7 +1696,7 @@ export interface CodexSessionImportResult {
 // ==================== Usage & Redeem Types ====================
 
 export type RedeemCodeType = 'balance' | 'concurrency' | 'subscription' | 'invitation'
-export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live'
+export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live' | 'probe'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
@@ -1783,13 +1783,13 @@ export interface AdminUsageLog extends UsageLog {
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
   // Codex 回合状态：上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文）
-  turn_state_sent?: string | null
-  turn_state_sent_length?: number | null
-  turn_state_returned_length?: number | null
-  turn_state_expected_length?: number | null
   turn_state?: string | null
-  // 本次出站带的是否为账号级 turn-state 覆写值
-  turn_state_overridden?: boolean | null
+	// 本次出站带的是否为账号级 turn-state 覆写值
+	turn_state_overridden?: boolean | null
+	// 覆写来源：manual / auto / auto_stale。
+	turn_state_source?: string | null
+	// 本次出站实际带的 turn-state（客户端回带的或注入的）。
+	turn_state_sent?: string | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null

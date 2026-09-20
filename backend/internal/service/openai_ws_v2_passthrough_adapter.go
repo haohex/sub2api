@@ -774,7 +774,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if c != nil {
 		// 客户端回带的 turn-state：已知由其他账号铸造（failover 换号）则剥离。
 		turnState = s.guardOpenAICodexTurnStateValue(c, account, c.GetHeader(openAIWSTurnStateHeader))
-		turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	identityFirst, identityErr := applyCodexIdentityToWSPayload(c, account, firstClientMessage)
@@ -823,6 +822,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	usageMeta.captureRequestedReasoningEffort(originalFirstClientMessage, capturedSessionModel)
 	_, initialUpstreamModel := usageMeta.turnModels(initialRequestModel)
 	SetOpsUpstreamModel(c, initialUpstreamModel)
+	// 手填覆写必须排在这行之后：覆写表是按模型存的，本次模型只有在 usageMeta 定完
+	// 首帧之后才知道。放在前面读到的是空串，取不到模型就不注入，等于对 WS 直通完全
+	// 不生效。turnState 直到下面构造上游请求时才被消费，挪到这里不影响其它逻辑。
+	if c != nil {
+		turnState = s.applyOpenAICodexTurnStateOverrideWSManualOnly(c, account, turnState)
+	}
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
 	if err != nil {
 		return fmt.Errorf("build ws url: %w", err)
@@ -958,7 +963,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 
-	var stateObservation atomic.Pointer[codexTurnStateObservation]
 	completedTurns := atomic.Int32{}
 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
 	var acceptedTurnStartedAt atomic.Pointer[time.Time]
@@ -1133,9 +1137,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if policyErr == nil && blocked == nil && isResponseCreate {
 				// 双开：后续帧的发送边界，与首帧同一收口。
 				out = s.guardOpenAICodexWSFrameTurnState(c, account, out)
-				var observation *codexTurnStateObservation
-				out, observation = s.prepareCodexTurnStateWSFrame(ctx, c, account, out, turnState, token, headers)
-				stateObservation.Store(observation)
+				out = applyCodexWSFrameWireProfile(c, account, out, turnState)
 				s.scheduleCodexWSSideCalls(c, account, headers, out)
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
@@ -1164,8 +1166,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	// 双开：首帧的发送边界——turn-state 走帧内、字段序对齐真客户端（握手上已被投影删掉）。
 	firstClientMessage = s.guardOpenAICodexWSFrameTurnState(c, account, firstClientMessage)
-	firstClientMessage, firstStateObservation := s.prepareCodexTurnStateWSFrame(ctx, c, account, firstClientMessage, turnState, token, headers)
-	stateObservation.Store(firstStateObservation)
+	firstClientMessage = applyCodexWSFrameWireProfile(c, account, firstClientMessage, turnState)
 	s.scheduleCodexWSSideCalls(c, account, headers, firstClientMessage)
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
@@ -1309,7 +1310,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if msgType != coderws.MessageText {
 					return nil
 				}
-				stateObservation.Load().observeEvent(payload, "")
 				observeOpenAIWeeklyResetEvent(ctx, account, payload)
 				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 				if eventType == "response.created" {

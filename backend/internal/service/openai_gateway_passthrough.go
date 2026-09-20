@@ -681,6 +681,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 剥离后再出站（openai_codex_turn_state.go）。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 	s.applyOpenAICodexTurnStateOverrideHeader(c, account, req.Header)
+	if err := openAITurnStateHoldError(c); err != nil {
+		return nil, err
+	}
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -778,10 +781,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	applyCodexDeviceWireProfile(c, account, req.Header, false)
-	// The account/model candidate is authoritative for this feature and must
-	// override any client-carried turn-state on the final outbound request.
-	applyConfiguredCodexTurnStateToRequest(account, req, gjson.GetBytes(body, "model").String(), token)
-	noteCodexTurnStateProbeUsage(c, req)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
 	// 侧信道：按真客户端节奏补一条只读 GET settings/user（openai_codex_side_calls.go）。

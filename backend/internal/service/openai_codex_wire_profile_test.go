@@ -626,10 +626,7 @@ func TestCodexDeviceWireProfileWSTurnStateInFrame(t *testing.T) {
 				require.Equal(t, []string{"type", "model", "client_metadata"}, topLevelKeys(t, out), "帧字段序对齐 ResponseCreateWsRequest")
 				requireCodexWSStreamRequestStart(t, out, "")
 			} else {
-				require.Equal(t, "turn-state-token", gjson.GetBytes(out, "client_metadata."+openAICodexTurnStateHeader).String(), "非双开也用帧内载体")
-				withoutState, err := sjson.DeleteBytes(out, "client_metadata."+openAICodexTurnStateHeader)
-				require.NoError(t, err)
-				require.Equal(t, string(frame), string(withoutState), "除 state 外保持原始字节")
+				require.Equal(t, string(frame), string(out), "未开投影的账号帧字节不变")
 			}
 			// 帧自带的 turn-state 不覆盖；没有 turn-state 不补；时间戳无条件重盖（真客户端
 			// core/src/client.rs:2105-2111 用 HashMap::insert，发送前必盖）；非 response.create
