@@ -202,6 +202,10 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	account.ApplyHeaderOverrides(headers)
 	setOpenAICodexRoutingHint(headers, account, routingModel, routingServiceTier)
 	applyCodexDeviceWireProfile(c, account, headers, true)
+	if account.TargetsChatGPTCodexUpstream() {
+		headers.Del(openAICodexTurnStateHeader)
+	}
+
 	logOpenAIRoutingDiagnostics(
 		ctx,
 		account,
@@ -251,41 +255,65 @@ const codexWSStreamRequestStartKey = "x-codex-ws-stream-request-start-ms"
 
 // applyCodexWSFrameWireProfile 是双开账号 response.create 帧的收口，三条 WS 路径
 // （ctx_pool ingress / v2 / passthrough）与 v2 预热帧都在各自的发送边界调用：
-//  1. 客户端自己持有的 turn-state 放进 client_metadata——真客户端的位置（core/src/client.rs:
-//     1792-1793，OnceLock 有值才带），握手上不带（client.rs:1241）。帧自带的不覆盖，没有值不补；
-//     网关自己铸出/存储的值不进帧（真客户端拿不到那些值，见调用方 clientTurnState 注释）。
+//  1. turn-state 放进 client_metadata——真客户端的位置（core/src/client.rs:
+//     1792-1793，OnceLock 有值才带），握手上不带（client.rs:1241）。客户端自带值通常不覆盖；
+//     但账号级候选 state 命中时，候选是本账号/本模型的最终值，必须覆盖帧内旧值。
 //  2. 发送前无条件盖 x-codex-ws-stream-request-start-ms，与真客户端每次 attempt 重盖一致；
 //     转发客户端原帧时也重盖：那个戳记的是客户端到网关那一跳，出站这一跳的时刻才是上游读到的。
 //  3. 顶层字段按 ResponseCreateWsRequest 声明序（codex-api/src/common.rs:334-363）。
 //
 // client_metadata 存在但不是对象时不往里塞键（sjson 会把标量整个换成对象）。
-func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []byte, turnState string) []byte {
-	if !codexDeviceWireProfileEnabled(c, account) {
-		return payload
-	}
+func applyCodexWSFrameWireProfile(c *gin.Context, account *Account, payload []byte, turnState string, candidateArgs ...string) []byte {
+	deviceProfile := codexDeviceWireProfileEnabled(c, account)
 	if eventType := gjson.GetBytes(payload, "type").String(); eventType != "" && eventType != "response.create" {
 		return payload
+	}
+	configuredState := ""
+	probeManaged := codexTurnStateProbeEnabled(account) && account.TargetsChatGPTCodexUpstream()
+	if len(candidateArgs) > 0 {
+		model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+		if model == "" && len(candidateArgs) > 1 && strings.TrimSpace(candidateArgs[1]) != "" {
+			model = strings.TrimSpace(candidateArgs[1])
+		}
+		configuredState = configuredCodexTurnState(account, model, candidateArgs[0], time.Now())
+		if configuredState != "" {
+			turnState = configuredState
+		}
+	}
+	if probeManaged {
+		// The client may echo an old low-compute value in the frame.  It is never
+		// an acceptable fallback for a managed account; only configuredState may
+		// be written below.
+		turnState = configuredState
 	}
 	// 覆写是管理员的显式动作，要盖过真客户端自带的 blob。判据必须是「本次真的覆写了」
 	// 而不是「extra 里有手填值」：开了自动接管时手填值刻意保留在 extra 里但不生效
 	//（applyOpenAICodexTurnStateOverrideWSManualOnly），按配置判会把握手时那一个陈旧
 	// blob 强按进整条连接的每一帧。上游解析覆写时会把实际注入值写进上下文。
 	forcedTurnStateOverride := turnState != "" && turnState == openAITurnStateInjectedFromContext(c)
+	if !deviceProfile && configuredState == "" && !forcedTurnStateOverride && !probeManaged && (turnState == "" || !account.TargetsChatGPTCodexUpstream()) {
+		return payload
+	}
 	if meta := gjson.GetBytes(payload, "client_metadata"); !meta.Exists() || meta.IsObject() {
+		if probeManaged && meta.IsObject() {
+			if cleaned, err := sjson.DeleteBytes(payload, "client_metadata."+openAICodexTurnStateHeader); err == nil {
+				payload = cleaned
+			}
+		}
 		if turnState = strings.TrimSpace(turnState); turnState != "" {
 			existing := gjson.GetBytes(payload, "client_metadata."+openAICodexTurnStateHeader)
-			// 默认「缺失才补」：真客户端自带的 blob 不覆盖。
-			// 但账号级覆写是管理员的显式动作，必须盖过自带值——双开 WS 路径上握手头
-			// 已被 enforceCodexIdentityHeaders 删掉（turn-state 只走帧内），这里再让步
-			// 就等于「配了但静默失效」，而使用记录仍按配置记 overridden=true，
-			// 污染这个功能唯一要产出的诊断数据。
-			if forcedTurnStateOverride ||
-				existing.Type != gjson.String || strings.TrimSpace(existing.Str) == "" {
+			if configuredState != "" || forcedTurnStateOverride || existing.Type != gjson.String || strings.TrimSpace(existing.Str) == "" {
 				payload = setCodexWSClientMetadataString(payload, openAICodexTurnStateHeader, turnState)
 			}
 		}
+		if !deviceProfile {
+			return payload
+		}
 		payload = setCodexWSClientMetadataString(payload, codexWSStreamRequestStartKey,
 			strconv.FormatInt(time.Now().UnixMilli(), 10))
+	}
+	if !deviceProfile {
+		return payload
 	}
 	timezone := codexWireTimezoneName(account)
 	payload = rewriteCodexEnvironmentTimezoneWithName(timezone, payload)

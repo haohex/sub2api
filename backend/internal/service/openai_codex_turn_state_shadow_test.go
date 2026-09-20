@@ -208,7 +208,7 @@ func TestCodexTurnStateShadowRowWSIngressOwnerIsParentIdentity(t *testing.T) {
 
 			inbound := codexWSIngressInbound()
 			frame := codexWSTestFrame
-			want := minted // 回落：会话存储里是握手铸出的值
+			want := "" // 新轮次不复用网关握手铸造的旧值；客户端回带值只进帧。
 			if tc.header {
 				want = eventBlob
 				inbound.Set(openAICodexTurnStateHeader, eventBlob)
@@ -227,16 +227,10 @@ func TestCodexTurnStateShadowRowWSIngressOwnerIsParentIdentity(t *testing.T) {
 			headers := dialer.Headers()
 			require.Len(t, headers, 2, "第二轮新拨")
 			require.Len(t, secondCapture.rawWrites, tc.frames)
-			if tc.convergence {
-				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "双开握手不带 turn-state")
-				for i, sent := range secondCapture.rawWrites {
-					require.Equal(t, want, gjson.GetBytes(sent, "client_metadata."+openAICodexTurnStateHeader).String(),
-						"影子行回带母账号身份下的 blob 不得被剥（第 %d 帧）：%s", i+1, sent)
-				}
-				return
+			require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "所有 Codex 出站握手都不带 turn-state")
+			for i, sent := range secondCapture.rawWrites {
+				require.Equal(t, want, gjson.GetBytes(sent, "client_metadata."+openAICodexTurnStateHeader).String(), "客户端回带值只走帧且保持母账号归属，第 %d 帧", i+1)
 			}
-			require.Equal(t, want, headers[1].Get(openAICodexTurnStateHeader),
-				"非双开影子行：握手承载母账号身份下的 blob，不得按影子行自身身份剥掉")
 		})
 	}
 }
@@ -297,31 +291,30 @@ func TestCodexTurnStateShadowRowWSV2OwnerIsParentIdentity(t *testing.T) {
 			require.Len(t, headers, 2)
 			require.Len(t, second.rawWrites, 1)
 			frameState := gjson.GetBytes(second.rawWrites[0], "client_metadata."+openAICodexTurnStateHeader)
-			if tc.convergence {
-				require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "双开握手不带 turn-state")
-				require.Equal(t, minted, frameState.String(), "影子行回带：双开帧内承载，不得按影子行自身身份剥掉：%s", second.rawWrites[0])
-				return
+			require.Empty(t, headers[1].Get(openAICodexTurnStateHeader), "所有 Codex 出站握手都不带 turn-state")
+			if tc.echo {
+				require.Equal(t, minted, frameState.String(), "客户端回带值移到帧内，归属仍为母账号")
+			} else {
+				require.False(t, frameState.Exists(), "新轮次不补网关缓存的旧握手值")
 			}
-			require.Equal(t, minted, headers[1].Get(openAICodexTurnStateHeader), "非双开影子行：握手承载（回带或会话存储回落），不得按影子行自身身份剥掉")
-			require.False(t, frameState.Exists())
+
 		})
 	}
 }
 
-// TestOpenAITurnStateOverrideBeatsEchoGuard 钉住账号级覆写与回声守卫的先后顺序。
+// TestRetiredTurnStateOverrideCannotBypassEchoGuard 钉住账号级覆写与回声守卫的先后顺序。
 //
 // 覆写必须排在 guardOpenAICodexTurnStateEcho 之后：守卫只剥不注，而覆写是管理员的
 // 显式动作。两者顺序颠倒时，凡是守卫会剥的场景（覆写值恰好是别的凭证域铸的——排查
 // 「跨账号复用 turn-state」时这正是主用法）就会「配了但静默失效」。
-func TestOpenAITurnStateOverrideBeatsEchoGuard(t *testing.T) {
+func TestRetiredTurnStateOverrideCannotBypassEchoGuard(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	parent, _, other := codexShadowTestRows(true)
 	const override = "gAAAAABoverride-blob-from-another-credential-domain"
 	if parent.Extra == nil {
 		parent.Extra = map[string]any{}
 	}
-	// 覆写表按模型存，键必须是 convTestBody 里那个模型，否则取不到票就不注入。
-	parent.Extra[openAITurnStateOverrideExtraKey] = map[string]any{"gpt-5.5": override}
+	parent.Extra[openAITurnStateOverrideExtraKey] = override
 
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
 	up := &httpUpstreamRecorder{responses: []*http.Response{codexShadowUpstreamResponse(false, "")}}
@@ -342,6 +335,5 @@ func TestOpenAITurnStateOverrideBeatsEchoGuard(t *testing.T) {
 	_, err := svc.Forward(context.Background(), c, parent, body)
 	require.NoError(t, err)
 	require.Len(t, up.requests, 1)
-	require.Equal(t, override, up.requests[0].Header.Get(openAICodexTurnStateHeader),
-		"覆写排在守卫之前的话，这里会是空——配置静默失效")
+	require.Empty(t, up.requests[0].Header.Get(openAICodexTurnStateHeader), "retired override must not restore a foreign account state")
 }

@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -91,6 +92,33 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 	require.NotContains(t, string(raw), "ciphertext-secret")
 	require.NotContains(t, string(raw), "secret-key")
 	require.Contains(t, src.Extra, service.OllamaCloudUsageSessionExtraKey)
+}
+
+func TestAccountFromServiceShallow_RedactsCodexTurnStateCache(t *testing.T) {
+	state := strings.Repeat("s", 292)
+	src := &service.Account{
+		ID: 10, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		Extra: map[string]any{
+			service.CodexTurnStateProbeEnabledExtraKey: true,
+			service.CodexTurnStateProbeProxyIDExtraKey: int64(3),
+			service.CodexTurnStateProbeCacheExtraKey: map[string]any{
+				"gpt-5.5": map[string]any{"state": state},
+			},
+			service.CodexTurnStateProbeFailureExtraKey: map[string]any{
+				"gpt-5.5": map[string]any{"attempts": 50, "failed_at": "2026-09-17T00:00:00Z"},
+			},
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotContains(t, got.Extra, service.CodexTurnStateProbeCacheExtraKey)
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), state)
+	enabled, ok := got.Extra[service.CodexTurnStateProbeEnabledExtraKey].(bool)
+	require.True(t, ok)
+	require.True(t, enabled)
+	require.Contains(t, got.Extra, service.CodexTurnStateProbeFailureExtraKey)
 }
 
 func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {

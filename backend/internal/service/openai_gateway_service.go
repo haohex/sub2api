@@ -139,12 +139,31 @@ var codexCLIOnlyDebugHeaderWhitelist = []string{
 type OpenAICodexUsageSnapshot struct {
 	PrimaryUsedPercent          *float64 `json:"primary_used_percent,omitempty"`
 	PrimaryResetAfterSeconds    *int     `json:"primary_reset_after_seconds,omitempty"`
+	PrimaryResetAtUnix          *int64   `json:"primary_reset_at_unix,omitempty"`
 	PrimaryWindowMinutes        *int     `json:"primary_window_minutes,omitempty"`
 	SecondaryUsedPercent        *float64 `json:"secondary_used_percent,omitempty"`
 	SecondaryResetAfterSeconds  *int     `json:"secondary_reset_after_seconds,omitempty"`
+	SecondaryResetAtUnix        *int64   `json:"secondary_reset_at_unix,omitempty"`
 	SecondaryWindowMinutes      *int     `json:"secondary_window_minutes,omitempty"`
 	PrimaryOverSecondaryPercent *float64 `json:"primary_over_secondary_percent,omitempty"`
 	UpdatedAt                   string   `json:"updated_at,omitempty"`
+}
+
+func (s *OpenAICodexUsageSnapshot) WeeklyResetAt() (time.Time, bool) {
+	if s == nil {
+		return time.Time{}, false
+	}
+	if s.PrimaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.PrimaryWindowMinutes)) && s.PrimaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.PrimaryResetAtUnix) {
+		return time.Unix(*s.PrimaryResetAtUnix, 0).UTC(), true
+	}
+	if s.SecondaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.SecondaryWindowMinutes)) && s.SecondaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.SecondaryResetAtUnix) {
+		return time.Unix(*s.SecondaryResetAtUnix, 0).UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func validOpenAIQuotaResetUnix(value int64) bool {
+	return value > 0 && value <= 253402300799
 }
 
 // NormalizedCodexLimits contains normalized 5h/7d rate limit data
@@ -455,6 +474,8 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	codexTurnStateProbe *CodexTurnStateProbeService
+
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -528,10 +549,6 @@ type OpenAIGatewayService struct {
 	// 只由「未注入请求」铸出的 blob 更新，详见 observeOpenAITurnStateMint。
 	openaiTurnStateSessions      sync.Map
 	openaiTurnStateSessionWrites atomic.Uint64
-	// openaiTurnStateTraffic: 账号+模型 -> 最近一次真实请求时刻，turn-state 猎手的空闲门槛依据。
-	openaiTurnStateTraffic sync.Map
-	// openaiTurnStateMinted: 账号+模型 -> 上游给它自然铸过 turn-state（进程内）。猎手自动定模型只认这些。
-	openaiTurnStateMinted sync.Map
 	// codexSideCalls：双开账号侧信道 GET 的去重窗口（openai_codex_side_calls.go）。
 	// 由构造器初始化；裸结构体（单元测试）里为 nil，侧信道整体停用。
 	codexSideCalls *codexSideCallState

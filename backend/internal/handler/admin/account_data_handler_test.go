@@ -107,7 +107,15 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
 			Credentials: map[string]any{"token": "secret"},
-			Extra:       map[string]any{"note": "x"},
+			Extra: map[string]any{
+				"note": "x",
+				service.CodexTurnStateProbeCacheExtraKey: map[string]any{
+					"gpt-5.5": map[string]any{"state": "secret-state"},
+				},
+				service.CodexTurnStateProbeFailureExtraKey: map[string]any{
+					"gpt-5.5": map[string]any{"attempts": 50},
+				},
+			},
 			ProxyID:     &proxyID,
 			Concurrency: 3,
 			Priority:    50,
@@ -129,6 +137,9 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	require.Equal(t, "pass", resp.Data.Proxies[0].Password)
 	require.Len(t, resp.Data.Accounts, 1)
 	require.Equal(t, "secret", resp.Data.Accounts[0].Credentials["token"])
+	require.Equal(t, "x", resp.Data.Accounts[0].Extra["note"])
+	require.NotContains(t, resp.Data.Accounts[0].Extra, service.CodexTurnStateProbeCacheExtraKey)
+	require.NotContains(t, resp.Data.Accounts[0].Extra, service.CodexTurnStateProbeFailureExtraKey)
 }
 
 func TestExportDataWithoutProxies(t *testing.T) {

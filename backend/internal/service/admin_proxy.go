@@ -309,7 +309,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 	})
 	result.PassedCount++
 
-	client, err := httpclient.GetClient(httpclient.Options{
+	client, err := httpclient.NewIsolatedClient(httpclient.Options{
 		ProxyURL:              proxyURL,
 		Timeout:               proxyQualityRequestTimeout,
 		ResponseHeaderTimeout: proxyQualityResponseHeaderTimeout,

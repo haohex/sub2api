@@ -39,9 +39,6 @@ type OpenAIRecordUsageInput struct {
 	PricingAt time.Time
 	// CyberBlocked 为 true 时把该用量行标记为 cyber（request_type=cyber），计费逻辑不变。
 	CyberBlocked bool
-	// RequestType 非零时直接写入该请求类型（猎手探测用 RequestTypeTurnStateProbe）；
-	// CyberBlocked 优先。零值保持既有行为：由 stream/ws 字段回推。
-	RequestType RequestType
 	// NativeCompactionV2 is an orthogonal semantic flag captured by the
 	// Responses handler from stream=true + compaction_trigger. It never stores
 	// the request payload and does not replace the transport request type.
@@ -50,8 +47,7 @@ type OpenAIRecordUsageInput struct {
 	// 空串表示没注入。handler 侧从 gin.Context 取出（OpenAITurnStateUsageSource）：
 	// RecordUsage 是异步的，到这里已经没有 gin.Context 了。
 	TurnStateSource string
-	// TurnStateSent 是本次出站实际带的 turn-state，同样由 handler 从 gin.Context 取。
-	TurnStateSent string
+	StateLengths    CodexStateUsageLengths
 	ChannelUsageFields
 }
 
@@ -168,8 +164,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result == nil {
 		return errors.New("openai usage result is nil")
 	}
-	// 探测走 hunt 代理、刻意不看账号是否停调度，它的 200 不能证明真实流量的 403 已经过去。
-	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI && input.RequestType != RequestTypeTurnStateProbe {
+	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 
@@ -385,16 +380,25 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		// Keep the image cache split in the existing usage_logs JSONB payload.
 		imageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
 	}
+	var turnStateExpectedLength *int
+	if account.TargetsChatGPTCodexUpstream() {
+		if expected := CodexTurnStateHealthyLength(account); expected > 0 {
+			turnStateExpectedLength = &expected
+		}
+	}
 	usageLog := &UsageLog{
 		UserID:                   user.ID,
 		APIKeyID:                 apiKey.ID,
 		AccountID:                account.ID,
 		RequestID:                requestID,
 		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, result.OpenAIWSMode),
+		TurnStateSent:            input.StateLengths.SentState,
 		TurnState:                usageCodexTurnStatePtr(result.UpstreamHeaders),
+		TurnStateSentLength:      input.StateLengths.Sent,
+		TurnStateReturnedLength:  input.StateLengths.Returned,
+		TurnStateExpectedLength:  turnStateExpectedLength,
 		TurnStateOverridden:      usageCodexTurnStateOverriddenPtr(account, input.TurnStateSource),
 		TurnStateSource:          usageCodexTurnStateSourcePtr(account, input.TurnStateSource),
-		TurnStateSent:            usageCodexTurnStateSentPtr(account, input.TurnStateSent),
 		Model:                    result.Model,
 		RequestedModel:           requestedModel,
 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
@@ -449,8 +453,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.Stream = result.Stream
 	if input.CyberBlocked {
 		usageLog.RequestType = RequestTypeCyberBlocked
-	} else if input.RequestType != RequestTypeUnknown {
-		usageLog.RequestType = input.RequestType.Normalize()
 	}
 	usageLog.OpenAIWSMode = result.OpenAIWSMode
 	usageLog.DurationMs = &durationMs
@@ -976,6 +978,12 @@ func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, 
 // ParseCodexRateLimitHeaders extracts Codex usage limits from response headers.
 // Exported for use in ratelimit_service when handling OpenAI 429 responses.
 func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
+	return parseCodexRateLimitHeadersAt(headers, time.Now())
+}
+
+const maxCodexResetDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+
+func parseCodexRateLimitHeadersAt(headers http.Header, now time.Time) *OpenAICodexUsageSnapshot {
 	snapshot := &OpenAICodexUsageSnapshot{}
 	hasData := false
 
@@ -998,16 +1006,31 @@ func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
 		}
 		return nil
 	}
+	parseInt64 := func(key string) *int64 {
+		if v := strings.TrimSpace(headers.Get(key)); v != "" {
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+				return &parsed
+			}
+		}
+		return nil
+	}
+	parseResetAfterSeconds := func(resetAtKey, resetAfterKey string) *int {
+		if resetAfter := codexResetAfterSecondsFromUnixHeader(headers.Get(resetAtKey), now); resetAfter != nil {
+			return resetAfter
+		}
+		return codexResetAfterSecondsFromLegacyHeader(headers.Get(resetAfterKey))
+	}
 
 	// Primary (weekly) limits
 	if v := parseFloat("x-codex-primary-used-percent"); v != nil {
 		snapshot.PrimaryUsedPercent = v
 		hasData = true
 	}
-	if v := parseInt("x-codex-primary-reset-after-seconds"); v != nil {
+	if v := parseResetAfterSeconds("x-codex-primary-reset-at", "x-codex-primary-reset-after-seconds"); v != nil {
 		snapshot.PrimaryResetAfterSeconds = v
 		hasData = true
 	}
+	snapshot.PrimaryResetAtUnix = parseInt64("x-codex-primary-reset-at")
 	if v := parseInt("x-codex-primary-window-minutes"); v != nil {
 		snapshot.PrimaryWindowMinutes = v
 		hasData = true
@@ -1018,10 +1041,11 @@ func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
 		snapshot.SecondaryUsedPercent = v
 		hasData = true
 	}
-	if v := parseInt("x-codex-secondary-reset-after-seconds"); v != nil {
+	if v := parseResetAfterSeconds("x-codex-secondary-reset-at", "x-codex-secondary-reset-after-seconds"); v != nil {
 		snapshot.SecondaryResetAfterSeconds = v
 		hasData = true
 	}
+	snapshot.SecondaryResetAtUnix = parseInt64("x-codex-secondary-reset-at")
 	if v := parseInt("x-codex-secondary-window-minutes"); v != nil {
 		snapshot.SecondaryWindowMinutes = v
 		hasData = true
@@ -1037,8 +1061,43 @@ func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
 		return nil
 	}
 
-	snapshot.UpdatedAt = time.Now().Format(time.RFC3339)
+	snapshot.UpdatedAt = now.Format(time.RFC3339)
 	return snapshot
+}
+
+func codexResetAfterSecondsFromUnixHeader(value string, now time.Time) *int {
+	resetAtUnix, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return nil
+	}
+	if resetAtUnix <= now.Unix() {
+		return codexResetAfterSecondsFromInt64(0)
+	}
+	maxInt64 := int64(^uint64(0) >> 1)
+	if now.Unix() < 0 && resetAtUnix > maxInt64+now.Unix() {
+		return nil
+	}
+	return codexResetAfterSecondsFromInt64(resetAtUnix - now.Unix())
+}
+
+func codexResetAfterSecondsFromLegacyHeader(value string) *int {
+	resetAfterSeconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return codexResetAfterSecondsFromInt64(resetAfterSeconds)
+}
+
+func codexResetAfterSecondsFromInt64(resetAfterSeconds int64) *int {
+	if resetAfterSeconds < 0 || resetAfterSeconds > maxCodexResetDurationSeconds {
+		return nil
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if resetAfterSeconds > maxInt {
+		return nil
+	}
+	result := int(resetAfterSeconds)
+	return &result
 }
 
 func codexSnapshotBaseTime(snapshot *OpenAICodexUsageSnapshot, fallback time.Time) time.Time {
@@ -1082,6 +1141,9 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 	if snapshot.PrimaryResetAfterSeconds != nil {
 		updates["codex_primary_reset_after_seconds"] = *snapshot.PrimaryResetAfterSeconds
 	}
+	if snapshot.PrimaryResetAtUnix != nil {
+		updates["codex_primary_reset_at_unix"] = *snapshot.PrimaryResetAtUnix
+	}
 	if snapshot.PrimaryWindowMinutes != nil {
 		updates["codex_primary_window_minutes"] = *snapshot.PrimaryWindowMinutes
 	}
@@ -1090,6 +1152,9 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 	}
 	if snapshot.SecondaryResetAfterSeconds != nil {
 		updates["codex_secondary_reset_after_seconds"] = *snapshot.SecondaryResetAfterSeconds
+	}
+	if snapshot.SecondaryResetAtUnix != nil {
+		updates["codex_secondary_reset_at_unix"] = *snapshot.SecondaryResetAtUnix
 	}
 	if snapshot.SecondaryWindowMinutes != nil {
 		updates["codex_secondary_window_minutes"] = *snapshot.SecondaryWindowMinutes
@@ -1141,6 +1206,9 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	}
 	if s == nil || s.accountRepo == nil {
 		return
+	}
+	if weeklyResetAt, ok := snapshot.WeeklyResetAt(); ok {
+		ObserveOpenAIWeeklyResetAt(ctx, accountID, weeklyResetAt)
 	}
 
 	now := time.Now()

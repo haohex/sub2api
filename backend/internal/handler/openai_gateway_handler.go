@@ -804,7 +804,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			turnStateSource := service.OpenAITurnStateUsageSource(c)
-			turnStateSent := service.OpenAITurnStateUsageSent(c)
+			stateLengths := service.OpenAICodexStateUsageLengths(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -822,7 +822,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
 					TurnStateSource:    turnStateSource,
-					TurnStateSent:      turnStateSent,
+					StateLengths:       stateLengths,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel),
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
@@ -1301,9 +1301,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
 					cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
-					// 与 /responses、/chat/completions 同构：Claude 协议桥也要能说清「全池被降智
-					// 暂停」，少这一行的话这条入口只剩笼统的 Service temporarily unavailable。
-					cls = classifySelectionFailureError(err, cls)
 					if !cls.ModelNotFound {
 						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					}
@@ -1393,7 +1390,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			turnStateSource := service.OpenAITurnStateUsageSource(c)
-			turnStateSent := service.OpenAITurnStateUsageSent(c)
+			stateLengths := service.OpenAICodexStateUsageLengths(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -1411,7 +1408,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
 					TurnStateSource:    turnStateSource,
-					TurnStateSent:      turnStateSent,
+					StateLengths:       stateLengths,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMappingMsg, reqModel, res.UpstreamModel),
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
@@ -1606,29 +1603,8 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 		h.anthropicStreamingAwareError(c, status, "api_error", failoverErr.ClientMessage, streamStarted)
 		return
 	}
-	if failoverErr != nil && failoverErr.Reason == service.OpenAITurnStateHoldReason {
-		// Claude 兼容桥是服务端注入 turn-state 的主要消费者，降智暂停在这里同样要说清原因，
-		// 不能被 mapUpstreamError 归一成「上游暂时不可用」的 502。
-		status, message := turnStateHoldClientResponse(failoverErr)
-		service.SetOpsUpstreamError(c, status, message, "")
-		h.anthropicStreamingAwareError(c, status, "api_error", message, streamStarted)
-		return
-	}
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
-}
-
-// turnStateHoldClientResponse 取降智暂停给客户端的状态码与说明（两个入口共用）。
-func turnStateHoldClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
-	status := failoverErr.ClientStatusCode
-	if status <= 0 {
-		status = http.StatusServiceUnavailable
-	}
-	message := strings.TrimSpace(failoverErr.ClientMessage)
-	if message == "" {
-		message = "account is paused until a healthy x-codex-turn-state is found"
-	}
-	return status, message
 }
 
 // ensureAnthropicErrorResponse writes a fallback Anthropic error if no response was written.
@@ -3004,7 +2980,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 				sessionID := service.ExtractClientSessionID(c)
 				turnStateSource := service.OpenAITurnStateUsageSource(c)
-				turnStateSent := service.OpenAITurnStateUsageSent(c)
+				stateLengths := service.OpenAICodexStateUsageLengths(c)
 				turnRecordPricingAt := turnPricing.currentOr(turnStart)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
@@ -3023,7 +2999,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						QuotaPlatform:      quotaPlatform,
 						SessionID:          sessionID,
 						TurnStateSource:    turnStateSource,
-						TurnStateSent:      turnStateSent,
+						StateLengths:       stateLengths,
 						ChannelUsageFields: turnUsageFields,
 						PricingAt:          turnRecordPricingAt,
 						CyberBlocked:       cyberBlocked,
@@ -3393,14 +3369,6 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			message = "previous_response_id requires an OpenAI API-key account for HTTP requests"
 		}
 		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", message, streamStarted)
-		return
-	}
-	if failoverErr.Reason == service.OpenAITurnStateHoldReason {
-		// 降智暂停：账号缺 292 被停调度，池里又没别的号。说明文字带模型名，客户端一眼能看出
-		// 不是上游故障。
-		status, message := turnStateHoldClientResponse(failoverErr)
-		service.SetOpsUpstreamError(c, status, message, "")
-		h.handleStreamingAwareError(c, status, "server_error", message, streamStarted)
 		return
 	}
 	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
