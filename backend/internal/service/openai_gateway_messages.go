@@ -413,13 +413,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
 		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
 	}
-	// Messages compatibility can restore its legacy session state after the
-	// shared request builder. Re-run the managed candidate guard at the final
-	// send boundary so a probe-managed account never forwards that value (or
-	// any other client echo) when its healthy candidate is absent.
-	if account.TargetsChatGPTCodexUpstream() {
-		applyConfiguredCodexTurnStateToRequest(account, upstreamReq, upstreamModel, token)
-	}
 
 	// 7. Send request
 	proxyURL := ""

@@ -279,7 +279,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			turnStateSource := service.OpenAITurnStateUsageSource(c)
-			stateLengths := service.OpenAICodexStateUsageLengths(c)
+			turnStateSent := service.OpenAITurnStateUsageSent(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -296,7 +296,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
 					TurnStateSource:    turnStateSource,
-					StateLengths:       stateLengths,
+					TurnStateSent:      turnStateSent,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel),
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,

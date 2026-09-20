@@ -103,7 +103,6 @@ type Group struct {
 	DailyLimitUSD             *float64 `json:"daily_limit_usd"`
 	WeeklyLimitUSD            *float64 `json:"weekly_limit_usd"`
 	MonthlyLimitUSD           *float64 `json:"monthly_limit_usd"`
-	FiveHourLimitUSD          *float64 `json:"five_hour_limit_usd"`
 	LongContextPricingEnabled bool     `json:"long_context_pricing_enabled"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
@@ -167,11 +166,6 @@ type Group struct {
 // 注意：普通用户接口不得返回 model_routing/account_count/account_groups 等内部信息。
 type AdminGroup struct {
 	Group
-	QuotaResetSourceAccountID   *int64     `json:"quota_reset_source_account_id"`
-	QuotaResetSourceAccountName string     `json:"quota_reset_source_account_name"`
-	QuotaResetSourceResetAt     *time.Time `json:"quota_reset_source_reset_at"`
-	QuotaResetIncludeMonthly    bool       `json:"quota_reset_include_monthly"`
-	QuotaResetSourceStatus      string     `json:"quota_reset_source_status"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
 	ForceOpenAIFast bool `json:"force_openai_fast"`
 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。
@@ -696,15 +690,13 @@ type AdminUsageLog struct {
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
 	// TurnState 是上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文），仅管理端可见。
 	// 长度在前端直接由该字符串算，不单独存列。
-	TurnStateSent           *string `json:"turn_state_sent,omitempty"`
-	TurnStateSentLength     *int    `json:"turn_state_sent_length"`
-	TurnStateReturnedLength *int    `json:"turn_state_returned_length"`
-	TurnStateExpectedLength *int    `json:"turn_state_expected_length"`
-	TurnState               *string `json:"turn_state,omitempty"`
+	TurnState *string `json:"turn_state,omitempty"`
 	// TurnStateOverridden 表示本次出站带的是账号级 turn-state 覆写值。
 	TurnStateOverridden *bool `json:"turn_state_overridden,omitempty"`
 	// TurnStateSource 是覆写来源：manual / auto / auto_stale。
 	TurnStateSource *string `json:"turn_state_source,omitempty"`
+	// TurnStateSent 是本次出站实际带的 turn-state（回带或注入）。
+	TurnStateSent *string `json:"turn_state_sent,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 
@@ -751,9 +743,8 @@ type UsageCleanupTask struct {
 // AccountSummary is a minimal account info for usage log display.
 // It intentionally excludes sensitive fields like Credentials, Proxy, etc.
 type AccountSummary struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	PlanType string `json:"plan_type,omitempty"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 type Setting struct {
@@ -776,11 +767,9 @@ type UserSubscription struct {
 	WeeklyWindowStart  *time.Time `json:"weekly_window_start"`
 	MonthlyWindowStart *time.Time `json:"monthly_window_start"`
 
-	DailyUsageUSD       float64    `json:"daily_usage_usd"`
-	WeeklyUsageUSD      float64    `json:"weekly_usage_usd"`
-	MonthlyUsageUSD     float64    `json:"monthly_usage_usd"`
-	FiveHourWindowStart *time.Time `json:"five_hour_window_start"`
-	FiveHourUsageUSD    float64    `json:"five_hour_usage_usd"`
+	DailyUsageUSD   float64 `json:"daily_usage_usd"`
+	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
+	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`

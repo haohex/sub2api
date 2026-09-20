@@ -576,7 +576,6 @@ export interface Group {
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
   monthly_limit_usd: number | null
-  five_hour_limit_usd: number | null
   long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
@@ -624,11 +623,6 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
-	quota_reset_source_account_id?: number | null
-	quota_reset_source_account_name?: string
-	quota_reset_source_reset_at?: string | null
-	quota_reset_include_monthly?: boolean
-	quota_reset_source_status?: 'disabled' | 'waiting' | 'active' | 'invalid' | string
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -802,9 +796,6 @@ export interface CreateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
-  five_hour_limit_usd?: number | null
-  quota_reset_source_account_id?: number | null
-  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -871,9 +862,6 @@ export interface UpdateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
-  five_hour_limit_usd?: number | null
-  quota_reset_source_account_id?: number | null
-  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -1182,7 +1170,7 @@ export interface Account {
   ollama_cloud_usage?: OllamaCloudUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
-    model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
+    model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string; reason?: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
@@ -1467,7 +1455,7 @@ export interface CodexUsageSnapshot {
 
 export type OpenAICompactMode = 'auto' | 'force_on' | 'force_off'
 export type OpenAIResponsesMode = 'auto' | 'force_responses' | 'force_chat_completions'
-export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings'
+export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode
@@ -1696,7 +1684,7 @@ export interface CodexSessionImportResult {
 // ==================== Usage & Redeem Types ====================
 
 export type RedeemCodeType = 'balance' | 'concurrency' | 'subscription' | 'invitation'
-export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live'
+export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live' | 'probe'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
@@ -1772,7 +1760,6 @@ export interface UsageLog {
 export interface UsageLogAccountSummary {
   id: number
   name: string
-  plan_type?: string | null
 }
 
 export interface AdminUsageLog extends UsageLog {
@@ -1783,13 +1770,13 @@ export interface AdminUsageLog extends UsageLog {
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
   // Codex 回合状态：上游本次铸出的 x-codex-turn-state（不透明 Fernet 密文）
-  turn_state_sent?: string | null
-  turn_state_sent_length?: number | null
-  turn_state_returned_length?: number | null
-  turn_state_expected_length?: number | null
   turn_state?: string | null
-  // 本次出站带的是否为账号级 turn-state 覆写值
+  // 本次出站是否实际注入了 turn-state 覆写值
   turn_state_overridden?: boolean | null
+  // 覆写来源：manual（手填）/ auto（自动接管）/ auto_stale（候选已过保鲜期但仍在用）
+  turn_state_source?: string | null
+  // 本次出站实际带的 turn-state（客户端回带的或注入的），与 turn_state（上游新铸的）分开
+  turn_state_sent?: string | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null
@@ -2077,11 +2064,9 @@ export interface UserSubscription {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
-  five_hour_usage_usd: number
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
-  five_hour_window_start: string | null
   created_at: string
   updated_at: string
   revoked_at?: string | null
@@ -2091,24 +2076,27 @@ export interface UserSubscription {
 }
 
 export interface SubscriptionProgress {
-  id: number
-  group_name: string
-  expires_at: string
-  expires_in_days: number
-  daily?: SubscriptionUsageWindow | null
-  weekly?: SubscriptionUsageWindow | null
-  monthly?: SubscriptionUsageWindow | null
-  five_hour?: SubscriptionUsageWindow | null
-}
-
-export interface SubscriptionUsageWindow {
-  limit_usd: number
-  used_usd: number
-  remaining_usd: number
-  percentage: number
-  window_start: string
-  resets_at: string
-  resets_in_seconds: number
+  subscription_id: number
+  daily: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  weekly: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  monthly: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  expires_at: string | null
+  days_remaining: number | null
 }
 
 export interface AssignSubscriptionRequest {

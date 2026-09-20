@@ -213,15 +213,6 @@ func ProvideOpenAIQuotaAutoResetService(
 	return service
 }
 
-func ProvideOpenAIGroupQuotaFollowResetService(
-	repo OpenAIGroupQuotaFollowResetRepository,
-	billingCache *BillingCacheService,
-) *OpenAIGroupQuotaFollowResetService {
-	svc := NewOpenAIGroupQuotaFollowResetService(repo, billingCache)
-	svc.Start()
-	return svc
-}
-
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -282,29 +273,6 @@ func ProvideAccountTestService(
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
 	return service
-}
-
-// ProvideCodexTurnStateProbeService creates and starts the account-level
-// Codex turn-state candidate refresher. It is intentionally separate from the
-// interactive account-test service. Acquisition and manual validation use
-// isolated SSE transports and bounded per-request deadlines.
-func ProvideCodexTurnStateProbeService(
-	accountRepo AccountRepository,
-	proxyRepo ProxyRepository,
-	tokenProvider *OpenAITokenProvider,
-	httpUpstream HTTPUpstream,
-	gateway *OpenAIGatewayService,
-	settings SettingRepository,
-	exitProber ProxyExitInfoProber,
-) *CodexTurnStateProbeService {
-	svc := NewCodexTurnStateProbeService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
-	svc.settingRepo = settings
-	svc.exitProber = exitProber
-	if gateway != nil {
-		gateway.codexTurnStateProbe = svc
-	}
-	svc.Start()
-	return svc
 }
 
 func ProvideGrokQuotaService(
@@ -914,7 +882,6 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,
-	ProvideOpenAIGroupQuotaFollowResetService,
 	ProvideGrokQuotaService,
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
@@ -924,7 +891,6 @@ var ProviderSet = wire.NewSet(
 	ProvideRateLimitService,
 	ProvideAccountUsageService,
 	ProvideAccountTestService,
-	ProvideCodexTurnStateProbeService,
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideSettingService,

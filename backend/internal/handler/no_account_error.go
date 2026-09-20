@@ -74,13 +74,6 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 	if err == nil {
 		return fallback
 	}
-	if strings.Contains(strings.ToLower(err.Error()), "high_compute_state_unavailable") {
-		return noAccountErrorClassification{
-			Status:  http.StatusServiceUnavailable,
-			ErrType: "high_compute_state_unavailable",
-			Message: "No healthy high-compute state is available for this model. Please retry later.",
-		}
-	}
 	// A 404 model_not_found fallback is authoritative and must not be downgraded
 	// to a rate-limit verdict. classifyNoAccountError only reaches it through
 	// DiagnoseModelAvailabilityForPlatform, a dedicated database query over

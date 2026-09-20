@@ -133,7 +133,6 @@ var auditBodySensitiveExactKeys = func() map[string]struct{} {
 		// custom_key 为用户自设的平台 API Key 明文，
 		// session 为 Ollama Cloud 用量的浏览器会话 Cookie 明文。
 		"proxy_key", "custom_key", "session",
-		"state", "x-codex-turn-state", "openai_turn_state_override", "codex_turn_state_probe_cache", "openai_turn_state_pool",
 	}
 	set := make(map[string]struct{}, len(builtin)+len(SensitiveCredentialKeys)+16)
 	for _, k := range builtin {

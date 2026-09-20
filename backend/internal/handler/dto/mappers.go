@@ -148,11 +148,6 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	}
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
-		QuotaResetSourceAccountID:   g.QuotaResetSourceAccountID,
-		QuotaResetSourceAccountName: g.QuotaResetSourceAccountName,
-		QuotaResetSourceResetAt:     g.QuotaResetSourceResetAt,
-		QuotaResetIncludeMonthly:    g.QuotaResetIncludeMonthly,
-		QuotaResetSourceStatus:      quotaResetSourceStatus(g),
 		ForceOpenAIFast:             g.ForceOpenAIFast,
 		FreeOpenAIFast:              g.FreeOpenAIFast,
 		ProfitControlEnabled:        g.ProfitControlEnabled,
@@ -182,19 +177,6 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	return out
 }
 
-func quotaResetSourceStatus(g *service.Group) string {
-	if g == nil || g.QuotaResetSourceAccountID == nil {
-		return "disabled"
-	}
-	if !g.QuotaResetSourceValid {
-		return "invalid"
-	}
-	if g.QuotaResetSourceResetAt == nil {
-		return "waiting"
-	}
-	return "active"
-}
-
 func groupFromServiceBase(g *service.Group) Group {
 	return Group{
 		ID:                              g.ID,
@@ -208,7 +190,6 @@ func groupFromServiceBase(g *service.Group) Group {
 		DailyLimitUSD:                   g.DailyLimitUSD,
 		WeeklyLimitUSD:                  g.WeeklyLimitUSD,
 		MonthlyLimitUSD:                 g.MonthlyLimitUSD,
-		FiveHourLimitUSD:                g.FiveHourLimitUSD,
 		LongContextPricingEnabled:       g.LongContextPricingEnabled,
 		AllowImageGeneration:            g.AllowImageGeneration,
 		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,
@@ -436,8 +417,7 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 		switch key {
 		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
-			service.OllamaCloudUsageSnapshotExtraKey,
-			service.CodexTurnStateProbeCacheExtraKey:
+			service.OllamaCloudUsageSnapshotExtraKey:
 			continue
 		default:
 			redacted[key] = value
@@ -683,16 +663,14 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 }
 
 // AccountSummaryFromService returns a minimal AccountSummary for usage log display.
-// It includes the non-sensitive plan type used to classify turn-state lengths,
-// but never exposes Credentials, Proxy, or other account secrets.
+// Only includes ID and Name - no sensitive fields like Credentials, Proxy, etc.
 func AccountSummaryFromService(a *service.Account) *AccountSummary {
 	if a == nil {
 		return nil
 	}
 	return &AccountSummary{
-		ID:       a.ID,
-		Name:     a.Name,
-		PlanType: a.GetCredential("plan_type"),
+		ID:   a.ID,
+		Name: a.Name,
 	}
 }
 
@@ -788,13 +766,10 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
-		TurnStateSent:           l.TurnStateSent,
 		TurnState:               l.TurnState,
-		TurnStateSentLength:     l.TurnStateSentLength,
-		TurnStateReturnedLength: l.TurnStateReturnedLength,
-		TurnStateExpectedLength: l.TurnStateExpectedLength,
 		TurnStateOverridden:     l.TurnStateOverridden,
 		TurnStateSource:         l.TurnStateSource,
+		TurnStateSent:           l.TurnStateSent,
 		BillingTier:             l.BillingTier,
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,
@@ -911,25 +886,23 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 
 func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscription {
 	return UserSubscription{
-		ID:                  sub.ID,
-		UserID:              sub.UserID,
-		GroupID:             sub.GroupID,
-		StartsAt:            sub.StartsAt,
-		ExpiresAt:           sub.ExpiresAt,
-		Status:              sub.Status,
-		DailyWindowStart:    sub.DailyWindowStart,
-		WeeklyWindowStart:   sub.WeeklyWindowStart,
-		MonthlyWindowStart:  sub.MonthlyWindowStart,
-		DailyUsageUSD:       sub.DailyUsageUSD,
-		WeeklyUsageUSD:      sub.WeeklyUsageUSD,
-		MonthlyUsageUSD:     sub.MonthlyUsageUSD,
-		FiveHourWindowStart: sub.FiveHourWindowStart,
-		FiveHourUsageUSD:    sub.FiveHourUsageUSD,
-		CreatedAt:           sub.CreatedAt,
-		UpdatedAt:           sub.UpdatedAt,
-		RevokedAt:           sub.DeletedAt,
-		User:                UserFromServiceShallow(sub.User),
-		Group:               GroupFromServiceShallow(sub.Group),
+		ID:                 sub.ID,
+		UserID:             sub.UserID,
+		GroupID:            sub.GroupID,
+		StartsAt:           sub.StartsAt,
+		ExpiresAt:          sub.ExpiresAt,
+		Status:             sub.Status,
+		DailyWindowStart:   sub.DailyWindowStart,
+		WeeklyWindowStart:  sub.WeeklyWindowStart,
+		MonthlyWindowStart: sub.MonthlyWindowStart,
+		DailyUsageUSD:      sub.DailyUsageUSD,
+		WeeklyUsageUSD:     sub.WeeklyUsageUSD,
+		MonthlyUsageUSD:    sub.MonthlyUsageUSD,
+		CreatedAt:          sub.CreatedAt,
+		UpdatedAt:          sub.UpdatedAt,
+		RevokedAt:          sub.DeletedAt,
+		User:               UserFromServiceShallow(sub.User),
+		Group:              GroupFromServiceShallow(sub.Group),
 	}
 }
 
