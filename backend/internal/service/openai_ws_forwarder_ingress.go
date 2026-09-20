@@ -1053,12 +1053,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					wroteDownstream,
 				)
 			}
-				if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
-					upstreamMessage = normalized
-				}
-				observeOpenAIWeeklyResetEvent(ctx, account, upstreamMessage)
+			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
+				upstreamMessage = normalized
+			}
+			observeOpenAIWeeklyResetEvent(ctx, account, upstreamMessage)
 
-				eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
