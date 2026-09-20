@@ -701,6 +701,8 @@ type AdminUsageLog struct {
 	TurnStateOverridden *bool `json:"turn_state_overridden,omitempty"`
 	// TurnStateSource 是覆写来源：manual / auto / auto_stale。
 	TurnStateSource *string `json:"turn_state_source,omitempty"`
+	// TurnStateSent 是本次出站实际带的 turn-state（客户端回带的或注入的）。
+	TurnStateSent *string `json:"turn_state_sent,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 
