@@ -1,5 +1,11 @@
 # 开发日志
 
+## 2026-09-21：本地 workspace 工具链与共享缓存
+
+- 在本机 WSL 安装 Go 1.27.0 和 pnpm 9.15.9；Go 命令通过用户目录提供，Go 模块/编译缓存与 pnpm store 放在 workspace 外的 `~/.cache/sub2api`，供其他 workspace 复用。
+- 根目录 `AGENTS.md` 补充 daemon 拓扑、工具链检查、首次依赖安装、缓存边界及可选 `paseo.json` setup 用法；不跨 workspace 共享 `node_modules`、`dist` 或临时构建目录。
+- 验证：`go -C backend mod download`、`pnpm --dir frontend install --frozen-lockfile --prefer-offline`、前端 `typecheck` 和生产构建通过。后端全量 unit 首次运行在已有的 `internal/repository` 时序用例失败后又卡在其他长测，已停止；未修改业务代码。
+
 ## 2026-09-21：账号级 OpenAI HTTP 请求体 JSON 覆盖
 
 - 为 OpenAI API Key/CPR 账号增加 `credentials.request_body_overrides`：按请求侧模型名（支持末尾 `*`）匹配，对最终 HTTP JSON body 做顶层浅覆盖；现有 `model_mapping` 继续负责别名到实际上游模型的映射。

@@ -21,3 +21,45 @@
 - VERSION 只在构建工作区注入完整发布版本，不直接回写 main。已发布 tag 不移动、已有版本产物不覆盖。相同 PR 重试沿用版本，冻结 bundle 丢失时停止，不擅自重建或换号。
 - 合并事件、每 15 分钟补偿和手动恢复共用串行状态机，不取消运行中的发布。旧版本不得回退稳定渠道；只显式认领符合校验的空历史 Release。
 - 上游同步只能创建审查 PR，不得强推 main、直接打产品 tag 或替维护者合并。首次启用需要将发布 workflow、脚本和约定通过 PR 合入 main。
+
+## 本地 Paseo workspace 工具链与共享缓存
+
+- 工具链和缓存安装在创建 workspace 的 Paseo daemon 所在机器；如果客户端连接的是远程或 Docker daemon，应在对应 daemon 环境重复配置，不要只在当前终端安装。
+- 本机 WSL 已安装 Go `1.27.0`、Node `24.21.0` 和 pnpm `9.15.9`。Go 通过用户目录安装，命令由 `~/.local/bin` 提供；不要使用系统级 `/usr/local` 安装覆盖它们。
+- Go 与 pnpm 的跨 workspace 缓存固定在 workspace 之外：
+  - `GOCACHE=~/.cache/sub2api/go-build`
+  - `GOMODCACHE=~/.cache/sub2api/go-mod`
+  - `GOPATH=~/.cache/sub2api/go`
+  - `GOBIN=~/.local/bin`
+  - pnpm store：`~/.cache/sub2api/pnpm-store`
+- 新 workspace 第一次准备依赖时执行：
+
+  ```bash
+  go -C backend mod download
+  pnpm --dir frontend install --frozen-lockfile --prefer-offline
+  ```
+
+- 后续 workspace 会复用 Go 模块/编译缓存和 pnpm store；`frontend/node_modules`、`frontend/dist` 以及 Vite/TypeScript 的工作目录仍必须各 workspace 独立，不要跨 workspace 软链接或复制 `node_modules`。
+- `frontend/pnpm-lock.yaml` 变化后仍须重新执行 frozen install；不要改用 `npm install`，也不要随意执行 `pnpm store prune` 清理共享缓存。
+- 检查当前 daemon 和工具链：
+
+  ```bash
+  paseo daemon status --json
+  go version
+  pnpm --version
+  go env GOCACHE GOMODCACHE GOPATH GOBIN
+  pnpm store path
+  ```
+
+- 如果需要让 Paseo 创建 workspace 后自动准备依赖，可在基础分支提交 `paseo.json`，加入以下配置；缓存环境变量应继续由 daemon 用户环境提供，不要写入 workspace 临时目录：
+
+  ```json
+  {
+    "worktree": {
+      "setup": [
+        "go -C backend mod download",
+        "pnpm --dir frontend install --frozen-lockfile --prefer-offline"
+      ]
+    }
+  }
+  ```
