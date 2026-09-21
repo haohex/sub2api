@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-09-21：账号级 OpenAI HTTP 请求体 JSON 覆盖
+
+- 为 OpenAI API Key/CPR 账号增加 `credentials.request_body_overrides`：按请求侧模型名（支持末尾 `*`）匹配，对最终 HTTP JSON body 做顶层浅覆盖；现有 `model_mapping` 继续负责别名到实际上游模型的映射。
+- 保存时校验模型规则、条目/字段/字节上限并拒绝 `model`、`messages`、`input`、`stream`、身份与会话字段；Responses、透传和 Chat Completions 共同出站构造点应用配置，调度缓存保留该字段。管理端账号编辑页提供 JSON 文本入口。
+- 该字段原样发送给自定义 OpenAI-compatible 上游；官方 OpenAI 等严格接口可能拒绝 `provider` / `providerOptions` 等未知字段。OAuth、setup-token、非 OpenAI 平台及 WebSocket 不启用。
+- 验证：`git diff --check` 通过；宿主机无 Go、pnpm 与前端依赖，后端 `go test` 和前端 Vitest 未执行，需在具备工具链的环境补跑。未访问真实上游或修改生产数据。
+
 ## 2026-09-18：严格高算力 State 出站与探测冷却修正
 
 - 受管账号的 HTTP、Messages 兼容桥和 WS 最终发送边界统一清除客户端/旧池 state；只允许当前账号、实际模型、有效且符合套餐长度的候选。没有候选时调度器换用健康账号，全部不可用返回 `high_compute_state_unavailable`，不再发送 312/356 等异常值。

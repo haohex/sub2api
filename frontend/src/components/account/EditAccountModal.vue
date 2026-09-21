@@ -415,6 +415,24 @@
           </template>
         </div>
 
+        <!-- Per-account raw JSON body fields for custom OpenAI-compatible upstreams. -->
+        <div v-if="requestBodyOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="input-label">{{ t('admin.accounts.requestBodyOverride.title') }}</label>
+          <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.requestBodyOverride.hint') }}
+          </p>
+          <textarea
+            v-model="requestBodyOverridesJson"
+            rows="9"
+            class="input min-h-40 font-mono text-xs"
+            spellcheck="false"
+            :placeholder="t('admin.accounts.requestBodyOverride.placeholder')"
+          ></textarea>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.requestBodyOverride.info') }}
+          </p>
+        </div>
+
         <!-- Pool Mode Section -->
         <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
@@ -921,6 +939,22 @@
           <label class="input-label">{{ t('admin.accounts.cpr.adminBaseUrl') }}</label>
           <input v-model="editCprAdminBaseUrl" type="text" class="input" :placeholder="editCprBaseUrl || 'http://127.0.0.1:18081'" />
           <p class="input-hint">{{ t('admin.accounts.cpr.adminBaseUrlHint') }}</p>
+        </div>
+        <div v-if="requestBodyOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="input-label">{{ t('admin.accounts.requestBodyOverride.title') }}</label>
+          <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.requestBodyOverride.hint') }}
+          </p>
+          <textarea
+            v-model="requestBodyOverridesJson"
+            rows="9"
+            class="input min-h-40 font-mono text-xs"
+            spellcheck="false"
+            :placeholder="t('admin.accounts.requestBodyOverride.placeholder')"
+          ></textarea>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.requestBodyOverride.info') }}
+          </p>
         </div>
       </div>
 
@@ -3412,6 +3446,9 @@ import {
   resolveOpenCodeAccountMode,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
+  isRequestBodyOverrideCapable,
+  parseRequestBodyOverridesJson,
+  serializeRequestBodyOverrides,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
   cnSupportsNativeResponses,
@@ -3420,6 +3457,7 @@ import {
   isCNProviderPlatform,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
+  REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY,
   type CnAccountMode,
   type CnApiProtocol,
   type CnNativeApiProtocol,
@@ -3757,9 +3795,13 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+const requestBodyOverridesJson = ref('')
 
 const headerOverrideCapable = computed(
   () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
+)
+const requestBodyOverrideCapable = computed(
+  () => !!props.account && isRequestBodyOverrideCapable(props.account.platform, props.account.type)
 )
 
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
@@ -4657,6 +4699,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
+  requestBodyOverridesJson.value = isRequestBodyOverrideCapable(newAccount.platform, newAccount.type)
+    ? serializeRequestBodyOverrides(credentials?.[REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY])
+    : ''
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
@@ -5803,6 +5848,19 @@ const handleSubmit = async () => {
         }
       }
 
+      if (requestBodyOverrideCapable.value) {
+        const parsedOverrides = parseRequestBodyOverridesJson(requestBodyOverridesJson.value)
+        if (parsedOverrides === null) {
+          appStore.showError(t('admin.accounts.requestBodyOverride.invalid'))
+          return
+        }
+        if (Object.keys(parsedOverrides).length > 0) {
+          newCredentials[REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY] = parsedOverrides
+        } else {
+          delete newCredentials[REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY]
+        }
+      }
+
       // Add pool mode if enabled
       if (poolModeEnabled.value) {
         newCredentials.pool_mode = true
@@ -5865,6 +5923,19 @@ const handleSubmit = async () => {
       }
       if (editCprAdminApiKey.value.trim()) {
         newCredentials.admin_api_key = editCprAdminApiKey.value.trim()
+      }
+
+      if (requestBodyOverrideCapable.value) {
+        const parsedOverrides = parseRequestBodyOverridesJson(requestBodyOverridesJson.value)
+        if (parsedOverrides === null) {
+          appStore.showError(t('admin.accounts.requestBodyOverride.invalid'))
+          return
+        }
+        if (Object.keys(parsedOverrides).length > 0) {
+          newCredentials[REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY] = parsedOverrides
+        } else {
+          delete newCredentials[REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY]
+        }
       }
 
       applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
