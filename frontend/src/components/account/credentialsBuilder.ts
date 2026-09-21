@@ -491,6 +491,78 @@ export function applyHeaderOverride(
   }
 }
 
+// ========== 账号级请求体 JSON 覆写（OpenAI API Key/CPR HTTP 上游） ==========
+
+export const REQUEST_BODY_OVERRIDES_CREDENTIAL_KEY = 'request_body_overrides'
+
+const REQUEST_BODY_OVERRIDE_BLOCKED_FIELDS = new Set([
+  'model',
+  'messages',
+  'input',
+  'stream',
+  'instructions',
+  'tools',
+  'tool_choice',
+  'previous_response_id',
+  'prompt_cache_key'
+])
+const REQUEST_BODY_OVERRIDE_MAX_RULES = 32
+const REQUEST_BODY_OVERRIDE_MAX_FIELDS = 64
+const REQUEST_BODY_OVERRIDE_MAX_PATTERN_LENGTH = 200
+const REQUEST_BODY_OVERRIDE_MAX_BYTES = 32 * 1024
+
+export type RequestBodyOverrides = Record<string, Record<string, unknown>>
+
+export function isRequestBodyOverrideCapable(platform: string, type: string): boolean {
+  return platform === 'openai' && (type === 'apikey' || type === 'cpr')
+}
+
+function isValidRequestBodyOverridePattern(pattern: string): boolean {
+  if (!pattern || pattern.length > REQUEST_BODY_OVERRIDE_MAX_PATTERN_LENGTH) return false
+  if (/\s/.test(pattern)) return false
+  const wildcardCount = (pattern.match(/\*/g) || []).length
+  if (wildcardCount > 1) return false
+  if (wildcardCount === 1 && !pattern.endsWith('*')) return false
+  return pattern !== '*'
+}
+
+/** 解析按“请求模型 → 顶层 JSON 字段对象”组织的账号请求体覆写。 */
+export function parseRequestBodyOverridesJson(text: string): RequestBodyOverrides | null {
+  if (!text.trim()) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+
+  const result: RequestBodyOverrides = {}
+  for (const [rawPattern, rawPatch] of Object.entries(parsed as Record<string, unknown>)) {
+    const pattern = rawPattern.trim()
+    if (!isValidRequestBodyOverridePattern(pattern)) return null
+    if (Object.prototype.hasOwnProperty.call(result, pattern)) return null
+    if (!rawPatch || typeof rawPatch !== 'object' || Array.isArray(rawPatch)) return null
+    const patch: Record<string, unknown> = {}
+    for (const [rawField, value] of Object.entries(rawPatch as Record<string, unknown>)) {
+      const field = rawField.trim()
+      if (!field || REQUEST_BODY_OVERRIDE_BLOCKED_FIELDS.has(field)) return null
+      if (Object.prototype.hasOwnProperty.call(patch, field)) return null
+      patch[field] = value
+    }
+    if (Object.keys(patch).length > REQUEST_BODY_OVERRIDE_MAX_FIELDS) return null
+    result[pattern] = patch
+  }
+  if (Object.keys(result).length > REQUEST_BODY_OVERRIDE_MAX_RULES) return null
+  if (new TextEncoder().encode(JSON.stringify(result)).length > REQUEST_BODY_OVERRIDE_MAX_BYTES) return null
+  return result
+}
+
+export function serializeRequestBodyOverrides(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  return JSON.stringify(value, null, 2)
+}
+
 // ===== OpenAI plan_type (ChatGPT 订阅档位) 手动覆盖 =====
 
 export interface PlanTypeOption {

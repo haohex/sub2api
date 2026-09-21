@@ -94,6 +94,12 @@ temp/
 dist/
 build/
 release/
+!tools/release/
+tools/release/*
+!tools/release/*.py
+!tools/release/merge-sync-main.sh
+!tools/release/merged-only.json
+!tools/release/main-protection.json
 
 # 后端嵌入的前端构建产物
 # Keep a placeholder file so `//go:embed all:dist` always has a match in CI/lint,
@@ -133,7 +139,15 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
-!docs/ANTIGRAVITY_ATTRIBUTION_429.md
+!docs/dev-journal.md
+!docs/tasks/
+docs/tasks/*
+!docs/tasks/codex-state-pool.md
+!docs/conventions/
+docs/conventions/*
+!docs/conventions/release-lifecycle.md
+!docs/conventions/codex-turn-state.md
+!docs/conventions/fork-contributions.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

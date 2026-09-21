@@ -243,6 +243,9 @@ type CreateGroupInput struct {
 	DailyLimitUSD             *float64 // 日限额 (USD)
 	WeeklyLimitUSD            *float64 // 周限额 (USD)
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
+	FiveHourLimitUSD          *float64 // 5 小时限额 (USD)
+	QuotaResetSourceAccountID *int64
+	QuotaResetIncludeMonthly  bool
 	LongContextPricingEnabled bool
 	ModelPricing              []ChannelModelPricing
 	// 图片生成计费配置（仅 antigravity 平台使用）
@@ -314,18 +317,22 @@ type CreateGroupInput struct {
 }
 
 type UpdateGroupInput struct {
-	Name                      string
-	Description               *string
-	Platform                  string
-	RateMultiplier            *float64 // 使用指针以支持设置为0
-	IsExclusive               *bool
-	Status                    string
-	SubscriptionType          string   // standard/subscription
-	DailyLimitUSD             *float64 // 日限额 (USD)
-	WeeklyLimitUSD            *float64 // 周限额 (USD)
-	MonthlyLimitUSD           *float64 // 月限额 (USD)
-	LongContextPricingEnabled *bool
-	ModelPricing              *[]ChannelModelPricing
+	Name                         string
+	Description                  *string
+	Platform                     string
+	RateMultiplier               *float64 // 使用指针以支持设置为0
+	IsExclusive                  *bool
+	Status                       string
+	SubscriptionType             string   // standard/subscription
+	DailyLimitUSD                *float64 // 日限额 (USD)
+	WeeklyLimitUSD               *float64 // 周限额 (USD)
+	MonthlyLimitUSD              *float64 // 月限额 (USD)
+	FiveHourLimitUSD             *float64 // 5 小时限额 (USD)
+	QuotaResetSourceAccountIDSet bool
+	QuotaResetSourceAccountID    *int64
+	QuotaResetIncludeMonthly     *bool
+	LongContextPricingEnabled    *bool
+	ModelPricing                 *[]ChannelModelPricing
 	// 图片生成计费配置（仅 antigravity 平台使用）
 	AllowImageGeneration         *bool
 	AllowBatchImageGeneration    *bool

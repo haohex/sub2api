@@ -64,22 +64,13 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_usage_updated_at":     {},
-	"grok_billing_snapshot":      {},
-	"session_window_utilization": {},
-	// turn-state 自动接管的候选池是运行态数据，上游每铸出一条健康 blob 就写一次，
-	// 不参与调度决策——不放进来的话每次响应都要重建一次调度快照。
-	"openai_turn_state_pool": {},
-	// 每个模型最近一次观测到的 turn-state 形态，所有 Codex 账号的响应路径上都会写
-	// （带节流），纯展示不参与调度。
-	"openai_turn_state_observed": {},
-	// CPR 侧的出站代理端点，跟着额度探测刷新，纯展示不参与调度。
-	"cpr_outbound_proxy": {},
-	// turn-state 猎手的运行态（下次窗口 / 本小时次数 / 最近 10 次），每次探测写一次，
-	// 纯展示不参与调度。配置键 openai_turn_state_hunter 由管理员写，不在此列。
-	"openai_turn_state_hunt": {},
-	// 降智恢复探测的运行态（连胜 / 下次窗口 / 已恢复时刻），每次探测写一次，纯展示不参与调度。
-	// 配置键 openai_turn_state_recovery 由管理员写，不在此列。
+	"codex_usage_updated_at":           {},
+	"grok_billing_snapshot":            {},
+	"session_window_utilization":       {},
+	"openai_turn_state_pool":           {},
+	"openai_turn_state_observed":       {},
+	"cpr_outbound_proxy":               {},
+	"openai_turn_state_hunt":           {},
 	"openai_turn_state_recovery_state": {},
 }
 
@@ -789,6 +780,9 @@ func lockAndMergeAccountProbeExtra(
 			}
 		}
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	return extra, nil
 }
 
@@ -1225,16 +1219,8 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
 	// 健康账号：temp_unschedulable_until=NULL）也排除，导致后台 token
 	// 刷新工作器漏掉所有正常账号 → access_token 到期后请求开始 401。
-	//
-	// Deliberately NO `schedulable = TRUE` filter here: paused accounts
-	// (schedulable=false, status=active) still hold valid refresh tokens and
-	// their stored access_token must keep working for the admin usage-window
-	// probe. Excluding them lets the token silently expire, after which the
-	// dashboard reports a false "needs re-auth" even though Test Connection
-	// (which refreshes on demand) succeeds. Permanent rejection is already
-	// covered by the status = 'active' filter (error accounts drop out), and
-	// accounts whose refresh actually fails are rate-limited by the
-	// ExcludeRetryCooldown clause below.
+	// 暂停账号仍保留有效 refresh token，不能因为 schedulable=false 而停止刷新；
+	// 否则管理端 usage-window probe 会把已过期 access_token 误报成需要重新授权。
 	query := `
 		SELECT id
 		FROM accounts
@@ -1321,8 +1307,7 @@ func (r *accountRepository) ListByPlatform(ctx context.Context, platform string)
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 		).
-		// 次级按 ID：同 priority 的行没有次级键时顺序随堆序漂移，猎手的跨 tick 游标靠不住。
-		Order(dbent.Asc(dbaccount.FieldPriority), dbent.Asc(dbaccount.FieldID)).
+		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
 	if err != nil {
 		return nil, err
