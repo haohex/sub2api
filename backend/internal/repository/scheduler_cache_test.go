@@ -20,6 +20,21 @@ func TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(t *testing.T) {
 	require.NotContains(t, filtered, "refresh_token")
 }
 
+func TestFilterSchedulerCredentialsKeepsRequestBodyOverrides(t *testing.T) {
+	patch := map[string]any{
+		"my-alias": map[string]any{
+			"provider": map[string]any{"only": []any{"deepseek"}},
+		},
+	}
+	filtered := filterSchedulerCredentials(map[string]any{
+		"request_body_overrides": patch,
+		"access_token":           "secret-access-token",
+	})
+
+	require.Equal(t, patch, filtered["request_body_overrides"])
+	require.NotContains(t, filtered, "access_token")
+}
+
 func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 	account := service.Account{
 		ID:       24,

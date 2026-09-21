@@ -162,6 +162,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	rememberOpenAIRequestBodyOverrideModel(c, originalModel)
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
@@ -1433,6 +1434,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 同一份出口解析结果的第二处投影：web_search 的 user_location 也要跟着改，
 	// 否则出站是"出口时区 + 客户端本机城市"（openai_codex_wire_user_location.go）。
 	body = rewriteCodexWebSearchUserLocation(c, account, body)
+	body = applyOpenAIRequestBodyOverrides(c, account, body)
 
 	// 上线字节：双开 /responses 的请求体按真客户端默认做 zstd 压缩（openai_codex_request_compression.go）。
 	// body 仍是明文 JSON，供下面的路由提示与诊断日志读取；每次构造独立压缩。

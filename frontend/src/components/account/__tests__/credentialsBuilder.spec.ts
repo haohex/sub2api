@@ -18,15 +18,46 @@ import {
   isCustomGrokBaseUrl,
   resolveOpenCodeAccountMode,
   isHeaderOverrideCapable,
+  isRequestBodyOverrideCapable,
   GROK_BASE_URL_PRESETS,
   parseHeaderOverridesJson,
+  parseRequestBodyOverridesJson,
   parseOpenCodeGoProtocolRules,
   planTypeDisplayLabel,
   readPlanType,
   serializeHeaderOverrideRows,
+  serializeRequestBodyOverrides,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows
 } from '../credentialsBuilder'
+
+describe('request body overrides', () => {
+  it('parses valid JSON and serializes it for the editor', () => {
+    const parsed = parseRequestBodyOverridesJson(
+      '{"my-alias":{"provider":{"only":["deepseek"]},"providerOptions":{"gateway":{"only":["deepseek"]}}}}'
+    )
+    expect(parsed).toEqual({
+      'my-alias': {
+        provider: { only: ['deepseek'] },
+        providerOptions: { gateway: { only: ['deepseek'] } }
+      }
+    })
+    expect(JSON.parse(serializeRequestBodyOverrides(parsed))).toEqual(parsed)
+  })
+
+  it('rejects protected fields and malformed rules', () => {
+    expect(parseRequestBodyOverridesJson('{"my-alias":{"model":"gpt-5"}}')).toBeNull()
+    expect(parseRequestBodyOverridesJson('{"*":{"provider":true}}')).toBeNull()
+    expect(parseRequestBodyOverridesJson('{"my*alias":{"provider":true}}')).toBeNull()
+  })
+
+  it('is limited to OpenAI API-key and CPR accounts', () => {
+    expect(isRequestBodyOverrideCapable('openai', 'apikey')).toBe(true)
+    expect(isRequestBodyOverrideCapable('openai', 'cpr')).toBe(true)
+    expect(isRequestBodyOverrideCapable('openai', 'oauth')).toBe(false)
+    expect(isRequestBodyOverrideCapable('anthropic', 'apikey')).toBe(false)
+  })
+})
 
 describe('applyInterceptWarmup', () => {
   it('create + enabled=true: should set intercept_warmup_requests to true', () => {

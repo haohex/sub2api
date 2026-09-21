@@ -938,6 +938,13 @@ export default {
         invalidValue: 'Invalid header value (control characters are not allowed; max length 8192)',
         tooManyEntries: 'Too many header override entries (max 64)'
       },
+      requestBodyOverride: {
+        title: 'Request Body JSON Override',
+        hint: 'Match by request model and override top-level outbound JSON fields for OpenAI API-key/CPR HTTP requests.',
+        placeholder: "{'{'}\n  \"my-model\": {'{'}\n    \"providerOptions\": {'{'}\"gateway\": {'{'}\"only\": [\"deepseek\"]{'}'}{'}'},\n    \"provider\": {'{'}\"only\": [\"deepseek\"]{'}'}\n  {'}'}\n{'}'}",
+        info: 'Use the request-side name from Model Mapping; core fields such as model, messages, input, and stream are protected. Fields are sent as-is to a custom compatible upstream; official OpenAI may reject unknown fields.',
+        invalid: 'Invalid request-body override JSON or protected field. Check the model rules and top-level JSON objects.'
+      },
       grokCustomBaseUrl: {
         title: 'Custom Upstream URL',
         hint: 'When enabled, account traffic (chat/media/probes) is forwarded to the specified address. OAuth authorization and token refresh are unaffected and stay on the official endpoints.',
