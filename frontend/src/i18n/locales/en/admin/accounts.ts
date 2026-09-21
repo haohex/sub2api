@@ -941,7 +941,7 @@ export default {
       requestBodyOverride: {
         title: 'Request Body JSON Override',
         hint: 'Match by request model and override top-level outbound JSON fields for OpenAI API-key/CPR HTTP requests.',
-        placeholder: '{\n  "my-model": {\n    "providerOptions": {"gateway": {"only": ["deepseek"]}},\n    "provider": {"only": ["deepseek"]}\n  }\n}',
+        placeholder: "{'{'}\n  \"my-model\": {'{'}\n    \"providerOptions\": {'{'}\"gateway\": {'{'}\"only\": [\"deepseek\"]{'}'}{'}'},\n    \"provider\": {'{'}\"only\": [\"deepseek\"]{'}'}\n  {'}'}\n{'}'}",
         info: 'Use the request-side name from Model Mapping; core fields such as model, messages, input, and stream are protected. Fields are sent as-is to a custom compatible upstream; official OpenAI may reject unknown fields.',
         invalid: 'Invalid request-body override JSON or protected field. Check the model rules and top-level JSON objects.'
       },

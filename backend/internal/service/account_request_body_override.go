@@ -14,26 +14,26 @@ import (
 )
 
 const (
-	credKeyRequestBodyOverrides                = "request_body_overrides"
-	maxRequestBodyOverrideRules                = 32
-	maxRequestBodyOverrideFieldsPerRule       = 64
-	maxRequestBodyOverrideModelPatternLength  = 200
-	maxRequestBodyOverridesJSONBytes          = 32 * 1024
+	credKeyRequestBodyOverrides              = "request_body_overrides"
+	maxRequestBodyOverrideRules              = 32
+	maxRequestBodyOverrideFieldsPerRule      = 64
+	maxRequestBodyOverrideModelPatternLength = 200
+	maxRequestBodyOverridesJSONBytes         = 32 * 1024
 )
 
 // These fields are owned by model mapping, protocol conversion, or session
 // isolation. Allowing an account patch to replace them would make routing,
 // billing, streaming, or conversation identity inconsistent.
 var requestBodyOverrideBlockedFields = map[string]struct{}{
-	"model":              {},
-	"messages":           {},
-	"input":              {},
-	"stream":             {},
-	"instructions":       {},
-	"tools":              {},
-	"tool_choice":        {},
+	"model":                {},
+	"messages":             {},
+	"input":                {},
+	"stream":               {},
+	"instructions":         {},
+	"tools":                {},
+	"tool_choice":          {},
 	"previous_response_id": {},
-	"prompt_cache_key":   {},
+	"prompt_cache_key":     {},
 }
 
 // IsRequestBodyOverrideEligible reports whether the account can send an

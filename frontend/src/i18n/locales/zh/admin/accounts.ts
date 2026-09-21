@@ -1010,7 +1010,7 @@ export default {
       requestBodyOverride: {
         title: '请求体 JSON 覆写',
         hint: '按请求模型名匹配并覆盖出站 JSON 的顶层字段，仅对 OpenAI API Key/CPR HTTP 请求生效。',
-        placeholder: '{\n  "my-model": {\n    "providerOptions": {"gateway": {"only": ["deepseek"]}},\n    "provider": {"only": ["deepseek"]}\n  }\n}',
+        placeholder: "{'{'}\n  \"my-model\": {'{'}\n    \"providerOptions\": {'{'}\"gateway\": {'{'}\"only\": [\"deepseek\"]{'}'}{'}'},\n    \"provider\": {'{'}\"only\": [\"deepseek\"]{'}'}\n  {'}'}\n{'}'}",
         info: '模型名应使用模型映射左侧的请求名；model、messages、input、stream 等核心字段不可覆写。字段会原样发送给自定义兼容上游，官方 OpenAI 可能拒绝未知字段。',
         invalid: '请求体 JSON 覆写格式不正确，或包含受保护字段。请检查模型规则和顶层 JSON 对象。'
       },
